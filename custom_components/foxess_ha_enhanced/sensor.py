@@ -56,8 +56,6 @@ _ENDPOINT_OA_DEVICE_VARIABLES_V1 = "/op/v1/device/real/query"
 _ENDPOINT_OA_DAILY_GENERATION = "/op/v0/device/generation?sn="
 _ENDPOINT_OA_SETTING_GET = "/op/v0/device/setting/get"
 _ENDPOINT_OA_SETTING_GET_V1 = "/op/v1/device/setting/get"
-_ENDPOINT_OA_SCHEDULER_GET = "/op/v0/device/scheduler/get"
-_ENDPOINT_OA_SCHEDULER_SET = "/op/v0/device/scheduler/set"
 
 METHOD_POST = "POST"
 METHOD_GET = "GET"
@@ -126,17 +124,6 @@ xtzone = False
 V1_Api = DEFAULT_USE_V1_API
 Evo = False
 
-_DEFAULT_SCHEDULER_GROUP = {
-    "enable": 0,
-    "start": "00:00",
-    "end": "00:00",
-    "workMode": "SelfUse",
-    "minsoc": 10,
-    "minsocongrid": 10,
-    "fdsoc": 10,
-}
-
-
 def _initial_all_data():
     all_data = {
         "report": {},
@@ -146,14 +133,6 @@ def _initial_all_data():
         "addressbook": {},
         "online": False,
         "workMode": None,
-        "scheduler": {
-            "loaded": False,
-            "groups": [
-                dict(_DEFAULT_SCHEDULER_GROUP),
-                dict(_DEFAULT_SCHEDULER_GROUP),
-                dict(_DEFAULT_SCHEDULER_GROUP),
-            ],
-        },
     }
     all_data["addressbook"]["hasBattery"] = False
     all_data["addressbook"]["status"] = "3"
@@ -247,10 +226,6 @@ class FoxESSCoordinator(DataUpdateCoordinator):
                 # Battery settings and daily generation are slow-changing; refresh once per cycle.
                 if tslice == 0:
                     await getOABatterySettings(
-                        self.hass, allData, self.device_sn, self.api_key, coordinator=self
-                    )
-                    await asyncio.sleep(1)
-                    await getScheduler(
                         self.hass, allData, self.device_sn, self.api_key, coordinator=self
                     )
                     await asyncio.sleep(1)
@@ -879,81 +854,6 @@ async def getWorkMode(hass, allData, devicesn, apiKey, coordinator=None):
 
     _LOGGER.debug("OA Work Mode Bad Response: %s", response)
     return True
-
-
-async def getScheduler(hass, allData, devicesn, apiKey, coordinator=None):
-    await waitforAPI(coordinator)
-
-    if "hasBattery" in allData["addressbook"] and not allData["addressbook"]["hasBattery"]:
-        return False  # No battery fitted, skip scheduler fetch
-
-    path = _ENDPOINT_OA_SCHEDULER_GET
-    headerData = GetAuth().get_signature(token=apiKey, path=path)
-
-    restScheduler = RestData(
-        hass,
-        METHOD_GET,
-        _ENDPOINT_OA_DOMAIN + path + "?sn=" + devicesn,
-        DEFAULT_ENCODING,
-        None,
-        headerData,
-        None,
-        None,
-        DEFAULT_VERIFY_SSL,
-        SSLCipherList.PYTHON_DEFAULT,
-        DEFAULT_TIMEOUT,
-    )
-    await restScheduler.async_update()
-
-    if restScheduler.data is None or restScheduler.data == "":
-        _LOGGER.debug("Unable to get scheduler from FoxESS Cloud")
-        return True
-
-    response = json.loads(restScheduler.data)
-    if response["errno"] == 0 and (response["msg"] == "success" or response["msg"] == "Operation successful"):
-        result = response.get("result", {})
-        groups = result.get("groups", [])
-        while len(groups) < 3:
-            groups.append(dict(_DEFAULT_SCHEDULER_GROUP))
-        allData["scheduler"]["groups"] = groups[:3]
-        allData["scheduler"]["loaded"] = True
-        _LOGGER.debug("Scheduler fetched: %s", groups[:3])
-        return False
-
-    _LOGGER.debug("Scheduler bad response: %s", response)
-    return True
-
-
-async def setScheduler(hass, devicesn, apiKey, groups, coordinator=None):
-    """Write all scheduler groups back to the FoxESS Cloud."""
-    await waitforAPI(coordinator)
-
-    path = _ENDPOINT_OA_SCHEDULER_SET
-    headerData = GetAuth().get_signature(token=apiKey, path=path)
-    payload = json.dumps({"sn": devicesn, "groups": groups})
-
-    rest = RestData(
-        hass,
-        METHOD_POST,
-        _ENDPOINT_OA_DOMAIN + path,
-        DEFAULT_ENCODING,
-        None,
-        headerData,
-        None,
-        payload,
-        DEFAULT_VERIFY_SSL,
-        SSLCipherList.PYTHON_DEFAULT,
-        DEFAULT_TIMEOUT,
-    )
-    await rest.async_update()
-
-    if not rest.data:
-        raise HomeAssistantError("FoxESS scheduler update returned no data")
-
-    response = json.loads(rest.data)
-    if response.get("errno") != 0:
-        _LOGGER.error("FoxESS scheduler update failed: %s", response)
-        raise HomeAssistantError("FoxESS scheduler update failed")
 
 
 async def getReportDailyGeneration(hass, allData, apiKey, devicesn, coordinator=None):

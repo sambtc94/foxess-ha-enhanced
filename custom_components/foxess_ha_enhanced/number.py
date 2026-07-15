@@ -19,7 +19,6 @@ from .sensor import (
     METHOD_POST,
     GetAuth,
     _ENDPOINT_OA_DOMAIN,
-    setScheduler,
     waitforAPI,
 )
 
@@ -303,135 +302,6 @@ class FoxESSMaxDischargeCurrentNumber(CoordinatorEntity, NumberEntity):
         self.coordinator.async_set_updated_data(self.coordinator.data)
 
 
-class FoxESSSchedulerMinSoCNumber(CoordinatorEntity, NumberEntity):
-    """Writable per-period minimum SoC for the scheduler."""
-
-    _attr_native_min_value = 10
-    _attr_native_max_value = 100
-    _attr_native_step = 1
-    _attr_native_unit_of_measurement = PERCENTAGE
-    _attr_mode = NumberMode.SLIDER
-    _attr_icon = "mdi:battery-low"
-
-    def __init__(self, coordinator, name, deviceID, deviceSN, apiKey, period: int):
-        super().__init__(coordinator=coordinator)
-        self._period = period
-        self._attr_name = f"{name} - Scheduler Period {period + 1} Min SoC"
-        self._attr_unique_id = f"{deviceID}scheduler-p{period + 1}-minsoc-number"
-        self._deviceSN = deviceSN
-        self._apiKey = apiKey
-        self._deviceID = deviceID
-
-    @property
-    def device_info(self):
-        return _device_info(self.coordinator, self._deviceID)
-
-    @property
-    def available(self) -> bool:
-        return self.coordinator.data.get("scheduler", {}).get("loaded", False)
-
-    @property
-    def native_value(self) -> float | None:
-        groups = self.coordinator.data.get("scheduler", {}).get("groups", [])
-        if self._period < len(groups):
-            return groups[self._period].get("minsoc")
-        return None
-
-    async def async_set_native_value(self, value: float) -> None:
-        groups = self.coordinator.data["scheduler"]["groups"]
-        groups[self._period]["minsoc"] = int(value)
-        await setScheduler(
-            self.hass, self._deviceSN, self._apiKey, groups, coordinator=self.coordinator,
-        )
-        self.coordinator.async_set_updated_data(self.coordinator.data)
-
-
-class FoxESSSchedulerMinSoCOnGridNumber(CoordinatorEntity, NumberEntity):
-    """Writable per-period minimum SoC on grid for the scheduler."""
-
-    _attr_native_min_value = 10
-    _attr_native_max_value = 100
-    _attr_native_step = 1
-    _attr_native_unit_of_measurement = PERCENTAGE
-    _attr_mode = NumberMode.SLIDER
-    _attr_icon = "mdi:battery-low"
-
-    def __init__(self, coordinator, name, deviceID, deviceSN, apiKey, period: int):
-        super().__init__(coordinator=coordinator)
-        self._period = period
-        self._attr_name = f"{name} - Scheduler Period {period + 1} Min SoC on Grid"
-        self._attr_unique_id = f"{deviceID}scheduler-p{period + 1}-minsocongrid-number"
-        self._deviceSN = deviceSN
-        self._apiKey = apiKey
-        self._deviceID = deviceID
-
-    @property
-    def device_info(self):
-        return _device_info(self.coordinator, self._deviceID)
-
-    @property
-    def available(self) -> bool:
-        return self.coordinator.data.get("scheduler", {}).get("loaded", False)
-
-    @property
-    def native_value(self) -> float | None:
-        groups = self.coordinator.data.get("scheduler", {}).get("groups", [])
-        if self._period < len(groups):
-            return groups[self._period].get("minsocongrid")
-        return None
-
-    async def async_set_native_value(self, value: float) -> None:
-        groups = self.coordinator.data["scheduler"]["groups"]
-        groups[self._period]["minsocongrid"] = int(value)
-        await setScheduler(
-            self.hass, self._deviceSN, self._apiKey, groups, coordinator=self.coordinator,
-        )
-        self.coordinator.async_set_updated_data(self.coordinator.data)
-
-
-class FoxESSSchedulerFdSoCNumber(CoordinatorEntity, NumberEntity):
-    """Writable per-period force-discharge stop SoC for the scheduler."""
-
-    _attr_native_min_value = 10
-    _attr_native_max_value = 100
-    _attr_native_step = 1
-    _attr_native_unit_of_measurement = PERCENTAGE
-    _attr_mode = NumberMode.SLIDER
-    _attr_icon = "mdi:battery-arrow-down"
-
-    def __init__(self, coordinator, name, deviceID, deviceSN, apiKey, period: int):
-        super().__init__(coordinator=coordinator)
-        self._period = period
-        self._attr_name = f"{name} - Scheduler Period {period + 1} Force Discharge SoC"
-        self._attr_unique_id = f"{deviceID}scheduler-p{period + 1}-fdsoc-number"
-        self._deviceSN = deviceSN
-        self._apiKey = apiKey
-        self._deviceID = deviceID
-
-    @property
-    def device_info(self):
-        return _device_info(self.coordinator, self._deviceID)
-
-    @property
-    def available(self) -> bool:
-        return self.coordinator.data.get("scheduler", {}).get("loaded", False)
-
-    @property
-    def native_value(self) -> float | None:
-        groups = self.coordinator.data.get("scheduler", {}).get("groups", [])
-        if self._period < len(groups):
-            return groups[self._period].get("fdsoc")
-        return None
-
-    async def async_set_native_value(self, value: float) -> None:
-        groups = self.coordinator.data["scheduler"]["groups"]
-        groups[self._period]["fdsoc"] = int(value)
-        await setScheduler(
-            self.hass, self._deviceSN, self._apiKey, groups, coordinator=self.coordinator,
-        )
-        self.coordinator.async_set_updated_data(self.coordinator.data)
-
-
 async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = hass.data[DOMAIN][entry.entry_id]
     name = entry.data.get("name", coordinator.name_prefix)
@@ -445,12 +315,6 @@ async def async_setup_entry(hass, entry, async_add_entities):
         FoxESSMaxChargeCurrentNumber(coordinator, name, device_id, device_sn, api_key),
         FoxESSMaxDischargeCurrentNumber(coordinator, name, device_id, device_sn, api_key),
     ]
-    for i in range(3):
-        entities.extend([
-            FoxESSSchedulerMinSoCNumber(coordinator, name, device_id, device_sn, api_key, period=i),
-            FoxESSSchedulerMinSoCOnGridNumber(coordinator, name, device_id, device_sn, api_key, period=i),
-            FoxESSSchedulerFdSoCNumber(coordinator, name, device_id, device_sn, api_key, period=i),
-        ])
     async_add_entities(entities)
 
 

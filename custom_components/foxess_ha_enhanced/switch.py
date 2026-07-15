@@ -7,7 +7,6 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import DOMAIN
 from .number import setMaxCurrent
-from .sensor import setScheduler
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -135,52 +134,6 @@ class FoxESSChargeDisableSwitch(CoordinatorEntity, SwitchEntity):
         self.coordinator.async_set_updated_data(self.coordinator.data)
 
 
-class FoxESSSchedulerPeriodSwitch(CoordinatorEntity, SwitchEntity):
-    """Switch to enable or disable an individual scheduler time period."""
-
-    _attr_icon = "mdi:calendar-check"
-
-    def __init__(self, coordinator, name, deviceID, deviceSN, apiKey, period: int):
-        super().__init__(coordinator=coordinator)
-        self._period = period
-        self._attr_name = f"{name} - Scheduler Period {period + 1} Enable"
-        self._attr_unique_id = f"{deviceID}scheduler-p{period + 1}-enable-switch"
-        self._deviceSN = deviceSN
-        self._apiKey = apiKey
-        self._deviceID = deviceID
-
-    @property
-    def device_info(self):
-        return _device_info(self.coordinator, self._deviceID)
-
-    @property
-    def available(self) -> bool:
-        return self.coordinator.data.get("scheduler", {}).get("loaded", False)
-
-    @property
-    def is_on(self) -> bool:
-        groups = self.coordinator.data.get("scheduler", {}).get("groups", [])
-        if self._period < len(groups):
-            return bool(groups[self._period].get("enable", 0))
-        return False
-
-    async def async_turn_on(self, **kwargs) -> None:
-        groups = self.coordinator.data["scheduler"]["groups"]
-        groups[self._period]["enable"] = 1
-        await setScheduler(
-            self.hass, self._deviceSN, self._apiKey, groups, coordinator=self.coordinator,
-        )
-        self.coordinator.async_set_updated_data(self.coordinator.data)
-
-    async def async_turn_off(self, **kwargs) -> None:
-        groups = self.coordinator.data["scheduler"]["groups"]
-        groups[self._period]["enable"] = 0
-        await setScheduler(
-            self.hass, self._deviceSN, self._apiKey, groups, coordinator=self.coordinator,
-        )
-        self.coordinator.async_set_updated_data(self.coordinator.data)
-
-
 async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = hass.data[DOMAIN][entry.entry_id]
     name = entry.data.get("name", coordinator.name_prefix)
@@ -192,10 +145,6 @@ async def async_setup_entry(hass, entry, async_add_entities):
         FoxESSDischargeDisableSwitch(coordinator, name, device_id, device_sn, api_key),
         FoxESSChargeDisableSwitch(coordinator, name, device_id, device_sn, api_key),
     ]
-    for i in range(3):
-        entities.append(
-            FoxESSSchedulerPeriodSwitch(coordinator, name, device_id, device_sn, api_key, period=i)
-        )
     async_add_entities(entities)
 
 
