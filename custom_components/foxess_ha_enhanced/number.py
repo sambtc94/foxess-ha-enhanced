@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 
-from homeassistant.components.number import NumberDeviceClass, NumberEntity, NumberMode
+from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.const import PERCENTAGE
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -62,7 +62,6 @@ async def setBatterySoC(hass, devicesn, apiKey, minSoc, minSocOnGrid, coordinato
 class FoxESSBatMinSoCNumber(CoordinatorEntity, NumberEntity):
     """Writable minimum battery State-of-Charge (off-grid limit)."""
 
-    _attr_device_class = NumberDeviceClass.BATTERY
     _attr_native_min_value = 10
     _attr_native_max_value = 100
     _attr_native_step = 1
@@ -122,7 +121,6 @@ class FoxESSBatMinSoCNumber(CoordinatorEntity, NumberEntity):
 class FoxESSBatMinSoCOnGridNumber(CoordinatorEntity, NumberEntity):
     """Writable minimum battery State-of-Charge when connected to the grid."""
 
-    _attr_device_class = NumberDeviceClass.BATTERY
     _attr_native_min_value = 10
     _attr_native_max_value = 100
     _attr_native_step = 1

@@ -53,6 +53,8 @@ _ENDPOINT_OA_DEVICE_DETAIL_V1 = "/op/v1/device/detail"
 _ENDPOINT_OA_DEVICE_VARIABLES = "/op/v0/device/real/query"
 _ENDPOINT_OA_DEVICE_VARIABLES_V1 = "/op/v1/device/real/query"
 _ENDPOINT_OA_DAILY_GENERATION = "/op/v0/device/generation?sn="
+_ENDPOINT_OA_SETTING_GET = "/op/v0/device/setting/get"
+_ENDPOINT_OA_SETTING_GET_V1 = "/op/v1/device/setting/get"
 
 METHOD_POST = "POST"
 METHOD_GET = "GET"
@@ -817,7 +819,8 @@ async def getReport(hass, allData, apiKey, devicesn, coordinator=None):
 async def getWorkMode(hass, allData, devicesn, apiKey, coordinator=None):
     await waitforAPI(coordinator)
 
-    path = "/op/v0/device/setting/get"
+    v1_api = coordinator.v1_api if coordinator is not None else DEFAULT_USE_V1_API
+    path = _ENDPOINT_OA_SETTING_GET_V1 if v1_api else _ENDPOINT_OA_SETTING_GET
     headerData = GetAuth().get_signature(token=apiKey, path=path)
     workModeData = json.dumps({"sn": devicesn, "key": "WorkMode"})
 
@@ -1985,7 +1988,6 @@ class FoxESSBatSoC(FoxESSBaseEntity, SensorEntity):
 
 
 class FoxESSBatMinSoC(FoxESSBaseEntity, SensorEntity):
-    _attr_device_class = SensorDeviceClass.BATTERY
     _attr_native_unit_of_measurement = "%"
 
     def __init__(self, coordinator, name, deviceID):
@@ -2016,7 +2018,6 @@ class FoxESSBatMinSoC(FoxESSBaseEntity, SensorEntity):
 
 
 class FoxESSBatMinSoConGrid(FoxESSBaseEntity, SensorEntity):
-    _attr_device_class = SensorDeviceClass.BATTERY
     _attr_native_unit_of_measurement = "%"
 
     def __init__(self, coordinator, name, deviceID):
