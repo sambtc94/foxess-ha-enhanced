@@ -1,10 +1,12 @@
 {
   "domain": "foxess",
   "name": "HA & FoxESSCloud integration",
-  "codeowners": ["@macxq","@r-amado","@fozzieuk"],
+  "codeowners": ["@macxq", "@r-amado", "@fozzieuk"],
   "dependencies": ["rest"],
   "documentation": "https://github.com/macxq/foxess-ha",
   "iot_class": "local_polling",
-  "issue_tracker":"https://github.com/macxq/foxess-ha/issues",
-  "version": "v0.4"  
+  "issue_tracker": "https://github.com/macxq/foxess-ha/issues",
+  "version": "v0.5",
+  "config_flow": true,
+  "platforms": ["sensor", "select", "number"]
 }

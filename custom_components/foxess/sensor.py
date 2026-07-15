@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 from collections import namedtuple
-from datetime import timedelta
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from dateutil import parser
 import time
 import logging
@@ -43,6 +42,8 @@ from homeassistant.util.ssl import SSLCipherList
 from homeassistant.helpers.icon import icon_for_battery_level
 import homeassistant.helpers.config_validation as cv
 
+from . import DOMAIN
+
 _LOGGER = logging.getLogger(__name__)
 _ENDPOINT_OA_DOMAIN = "https://www.foxesscloud.com"
 _ENDPOINT_OA_BATTERY_SETTINGS = "/op/v0/device/battery/soc/get?sn="
@@ -80,15 +81,19 @@ CONF_XTZONE = "xtZone"
 CONF_GET_VARIABLES = "Restrict"
 CONF_V1_API = "Use_V1_Api"
 CONF_EVO = "Evo"
+CONF_REFRESH_INTERVAL = "refreshInterval"
 RETRY_NEXT_SLOT = -1
-RETRY_IN_5_MINS = 25
 DNS_ERROR = 101
 
 DEFAULT_NAME = "FoxESS"
 DEFAULT_VERIFY_SSL = False  # True
+DEFAULT_USE_V1_API = True
 
-SCAN_MINUTES = 1  # number of minutes betwen API requests
+SCAN_MINUTES = 5  # default interval in minutes between API requests
 SCAN_INTERVAL = timedelta(minutes=SCAN_MINUTES)
+# Cycle length in ticks before resetting to tslice=0 (battery settings + daily gen refresh).
+# At the default 5-min interval: 12 ticks × 5 min = 60-minute cycle.
+TICK_CYCLE_LENGTH = 11
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     {
@@ -103,189 +108,382 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
         vol.Optional(CONF_GET_VARIABLES): cv.boolean,
         vol.Optional(CONF_V1_API): cv.boolean,
         vol.Optional(CONF_EVO): cv.boolean,
+        vol.Optional(CONF_REFRESH_INTERVAL, default=SCAN_MINUTES): vol.All(
+            vol.Coerce(int), vol.Range(min=1, max=30)
+        ),
     }
 )
 
 token = None
+last_api = 0
+RestrictGetVar = False
+xtzone = False
+V1_Api = DEFAULT_USE_V1_API
+Evo = False
 
 
-async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
-    """Set up the FoxESS sensor."""
-    global LastHour, timeslice, last_api, RestrictGetVar, xtzone, V1_Api, Evo
-    Evo = False
-    name = config.get(CONF_NAME)
-    deviceID = config.get(CONF_DEVICEID)
-    devicesn = config.get(CONF_DEVICESN)
-    apiKey = config.get(CONF_APIKEY)
-    ExtPV = config.get(CONF_EXTPV)
-    xtzone = config.get(CONF_XTZONE)
-    RestrictGetVar = config.get(CONF_GET_VARIABLES)
-    V1_Api = config.get(CONF_V1_API)
-    Evo = config.get(CONF_EVO)
-    _LOGGER.debug("API Key: %s", apiKey)
-    _LOGGER.debug("Device SN: %s", devicesn)
-    _LOGGER.debug("Device ID: %s", deviceID)
-    _LOGGER.debug("FoxESS Scan Interval: %s minutes", SCAN_MINUTES)
-    _LOGGER.debug("Cross Time Zone: %s", xtzone)
-    _LOGGER.debug("Restrict Variables: %s", RestrictGetVar)
-    _LOGGER.debug("Extended PV: %s", ExtPV)
-    _LOGGER.debug("v1 Api Calls: %s", V1_Api)
-    _LOGGER.debug("EVO: %s", Evo)
-    if V1_Api is not False:
-        V1_Api = True
-        _LOGGER.debug("v1 Api Calls Enabled")
-    else:
-        _LOGGER.warning("v1 Api Calls Disabled, using v0")
-    if ExtPV is not True:
-        ExtPV = False
-        _LOGGER.debug("Extended PV Disabled")
-    else:
-        _LOGGER.warning("Extended PV 1-18 strings enabled")
-    if RestrictGetVar is not True:
-        RestrictGetVar = False
-        _LOGGER.debug("Get Variables is full variable mode")
-    else:
-        _LOGGER.warning("Get Variables is in restricted mode")
-    timeslice = {}
-    timeslice[devicesn] = RETRY_NEXT_SLOT
-    last_api = 0
-    LastHour = 0
-    allData = {
+def _initial_all_data():
+    all_data = {
         "report": {},
         "reportDailyGeneration": {},
         "raw": {},
         "battery": {},
         "addressbook": {},
         "online": False,
+        "workMode": None,
     }
-    allData["addressbook"]["hasBattery"] = False  # assume no battery is fitted for now
-    allData["addressbook"]["status"] = "3"  # assume inverter is off-line for now
+    all_data["addressbook"]["hasBattery"] = False
+    all_data["addressbook"]["status"] = "3"
+    return all_data
 
-    async def async_update_data():
+
+class FoxESSCoordinator(DataUpdateCoordinator):
+    def __init__(
+        self,
+        hass,
+        *,
+        device_id,
+        device_sn,
+        api_key,
+        name_prefix,
+        refresh_interval,
+        ext_pv=False,
+        xt_zone=False,
+        restrict_get_var=False,
+        v1_api=DEFAULT_USE_V1_API,
+        evo=False,
+    ):
+        self.device_id = device_id
+        self.device_sn = device_sn
+        self.api_key = api_key
+        self.name_prefix = name_prefix
+        self.ext_pv = ext_pv
+        self.xt_zone = xt_zone
+        self.restrict_get_var = restrict_get_var
+        self.v1_api = v1_api
+        self.evo = evo
+        self._refresh_interval = refresh_interval
+        self._timeslice = RETRY_NEXT_SLOT
+        self._last_hour = None
+        self._last_api = 0
+        self._api_calls_today = 0
+        self._api_calls_date = date.today()
+        self._all_data = _initial_all_data()
+        super().__init__(
+            hass,
+            _LOGGER,
+            name=name_prefix,
+            update_interval=timedelta(minutes=refresh_interval),
+        )
+
+    @property
+    def api_calls_today(self):
+        return self._api_calls_today
+
+    def increment_api_call(self):
+        today = date.today()
+        if self._api_calls_date != today:
+            self._api_calls_date = today
+            self._api_calls_today = 0
+        self._api_calls_today += 1
+
+    async def _async_update_data(self):
+        allData = self._all_data
         _LOGGER.debug("Updating data from https://www.foxesscloud.com/")
-        global token, timeslice, LastHour
-        hournow = datetime.now().strftime("%H")  # update hour now
-        _LOGGER.debug("Time now: %s, last %s", hournow, LastHour)
-        tslice = timeslice[devicesn] + 1 # increment current device time slice
-        timeslice[devicesn] = tslice
-        if tslice % 5 == 0:
-            _LOGGER.debug("Main Poll, interval: %s, %s", devicesn, timeslice[devicesn])
-            # try the openapi see if we get a response
-            geterror = False
-            if tslice % 15 == 0:
-                # get device detail at startup, then every 15 minutes to save api calls
-                if Evo:
-                    # Evo not currently in device detail, use list and fill partial blanks
-                    geterror = await getOADeviceList(hass, allData, devicesn, apiKey)
-                else:
-                    geterror = await getOADeviceDetail(hass, allData, devicesn, apiKey)
-                await asyncio.sleep(1)  # OpenAPI demand
-            if not geterror:
-                if allData["addressbook"]["status"] is not None:
-                    statetest = int(allData["addressbook"]["status"])
-                    if statetest in [3]:
-                        allData["raw"]["runningState"] = "164"  # off-grid
-                else:
-                    statetest = 0
-                _LOGGER.debug(" Statetest %s", statetest)
-                if statetest in [1, 2]:
-                    allData["online"] = True
-                    if tslice == 0:
-                        # read in battery settings if fitted at startup, then every 60 mins
-                        await getOABatterySettings(hass, allData, devicesn, apiKey)
-                        await asyncio.sleep(1)  # OpenAPI demand
-                    # main real time data fetch, followed by reports
-                    geterror = await getRaw(hass, allData, apiKey, devicesn)
-                    if not geterror:
-                        if tslice % 15 == 0:  # do at startup and every 15 minutes
-                            await asyncio.sleep(1)  # OpenAPI demand limit
-                            geterror = await getReport(hass, allData, apiKey, devicesn)
-                            if not geterror:
-                                if tslice == 0:
-                                    # get daily generation at startup, then every 60 minutes
-                                    await asyncio.sleep(1)  # OpenAPI demand
-                                    geterror = await getReportDailyGeneration(hass, allData, apiKey, devicesn)
-                                    if geterror:
-                                        _LOGGER.debug("getReportDailyGeneration False")
-                            else:
-                                _LOGGER.debug("getReport False")
-                            if geterror:
-                                geterror = False
-                                allData["online"] = False
-                                tslice = RETRY_IN_5_MINS  # retry in 5 minutes
-                    else:
-                        _LOGGER.debug("get variables failed")
-                        if statetest == 2:
-                            # The inverter is in alarm, don't check every minute
-                            _LOGGER.debug(
-                                "Inverter in alarm, slowing retry response for SN: %s",
-                                devicesn,
-                            )
-                            allData["online"] = False
-                            tslice = RETRY_IN_5_MINS  # retry in 5 minutes
-                        else:
-                            if geterror==DNS_ERROR:
-                                _LOGGER.warning("Fox Cloud - DNS fail, retry in 1 minute")
-                                # retry in 1 minute
-                                if tslice != 0:
-                                    tslice = (tslice-1)
-                                else:
-                                    tslice = RETRY_NEXT_SLOT
-                            else:
-                                # The get variables api call failed, leave it 5 minutes
-                                _LOGGER.debug("slowing retry response for SN: %s", devicesn)
-                                allData["online"] = False
-                                tslice = RETRY_IN_5_MINS  # retry in 5 minutes
-                        geterror = False
-                else:
-                    if statetest == 3:
-                        # The inverter is off-line, no raw data polling, don't update entities
-                        # retry device detail call every 5 minutes until it comes back on-line
-                        allData["online"] = False
-                        tslice = RETRY_IN_5_MINS  # retry in 5 minutes
-                        _LOGGER.debug("Inverter off-line for SN: %s", devicesn)
+        hournow = datetime.now().strftime("%H")
+        tslice = self._timeslice + 1
+        self._timeslice = tslice
 
-                if not allData["online"]:
-                    if not geterror:
-                        _LOGGER.warning("%s Inverter is off-line, waiting to retry", name)
-                    else:
-                        _LOGGER.warning("%s Cloud timeout, retry in 1 minute", name)
+        _LOGGER.debug("Poll tick: %s, tslice %s", self.device_sn, tslice)
+        geterror = False
+
+        # Refresh device detail every 3 ticks (~15 min at the default 5-min interval).
+        # tslice==0 also satisfies % 3, so device detail is always fetched on startup.
+        if tslice % 3 == 0:
+            if self.evo:
+                geterror = await getOADeviceList(
+                    self.hass, allData, self.device_sn, self.api_key, coordinator=self
+                )
             else:
-                _LOGGER.warning("%s Cloud timeout on Device Detail, retry in 1 minute.", name)
+                geterror = await getOADeviceDetail(
+                    self.hass, allData, self.device_sn, self.api_key, coordinator=self
+                )
+            await asyncio.sleep(1)
 
-            if geterror is not False:
-                allData["online"] = False
-                if tslice != 0:
-                    tslice = tslice-1
-                    # failed to get specific detail so retry slot in 1 minute
+        if not geterror:
+            if allData["addressbook"]["status"] is not None:
+                statetest = int(allData["addressbook"]["status"])
+                if statetest in [3]:
+                    allData["raw"]["runningState"] = "164"
+            else:
+                statetest = 0
+            _LOGGER.debug("Statetest %s", statetest)
+
+            if statetest in [1, 2]:
+                allData["online"] = True
+                # Battery settings and daily generation are slow-changing; refresh once per cycle.
+                if tslice == 0:
+                    await getOABatterySettings(
+                        self.hass, allData, self.device_sn, self.api_key, coordinator=self
+                    )
+                    await asyncio.sleep(1)
+                geterror = await getRaw(
+                    self.hass, allData, self.api_key, self.device_sn, coordinator=self
+                )
+                if not geterror:
+                    if tslice % 3 == 0:
+                        await asyncio.sleep(1)
+                        geterror = await getReport(
+                            self.hass, allData, self.api_key, self.device_sn, coordinator=self
+                        )
+                        if not geterror:
+                            await asyncio.sleep(1)
+                            work_mode_error = await getWorkMode(
+                                self.hass, allData, self.device_sn, self.api_key, coordinator=self
+                            )
+                            if work_mode_error:
+                                _LOGGER.debug("getWorkMode returned error")
+                            if tslice == 0:
+                                await asyncio.sleep(1)
+                                geterror = await getReportDailyGeneration(
+                                    self.hass,
+                                    allData,
+                                    self.api_key,
+                                    self.device_sn,
+                                    coordinator=self,
+                                )
+                                if geterror:
+                                    _LOGGER.debug("getReportDailyGeneration returned error")
+                        else:
+                            _LOGGER.debug("getReport returned error")
+                        if geterror:
+                            geterror = False
+                            allData["online"] = False
                 else:
-                    tslice = RETRY_NEXT_SLOT  # failed to get full data, try again in 1 minute
+                    _LOGGER.debug("getRaw failed for SN: %s", self.device_sn)
+                    if statetest == 2:
+                        _LOGGER.debug("Inverter in alarm state for SN: %s", self.device_sn)
+                        allData["online"] = False
+                    else:
+                        if geterror == DNS_ERROR:
+                            _LOGGER.warning("Fox Cloud - DNS failure, will retry next poll")
+                        else:
+                            allData["online"] = False
+                    geterror = False
+            else:
+                if statetest == 3:
+                    allData["online"] = False
+                    _LOGGER.debug("Inverter off-line for SN: %s", self.device_sn)
 
-        # actions here are every minute
-        if tslice >= 59:
-            tslice = RETRY_NEXT_SLOT  # reset timeslot, ready for full data fetch at 0
-        _LOGGER.debug("Auxilliary timeslice %s, %s", devicesn, tslice)
+            if not allData["online"]:
+                _LOGGER.warning("%s Inverter is off-line, waiting to retry", self.name_prefix)
+        else:
+            _LOGGER.warning(
+                "%s Cloud timeout on Device Detail, will retry next poll.",
+                self.name_prefix,
+            )
 
-        if LastHour != hournow:
-            LastHour = hournow  # update the hour the last poll was run
+        # Reset the cycle counter so battery settings and daily gen are refreshed each hour.
+        if tslice >= TICK_CYCLE_LENGTH:
+            tslice = RETRY_NEXT_SLOT
+        _LOGGER.debug("Poll tick complete %s, next tslice %s", self.device_sn, tslice)
 
-        timeslice[devicesn] = tslice
+        if self._last_hour != hournow:
+            self._last_hour = hournow
 
+        self._timeslice = tslice
         _LOGGER.debug(allData)
-
         return allData
 
-    coordinator = DataUpdateCoordinator(
-        hass,
-        _LOGGER,
-        # Name of the data. For logging purposes.
-        name=DEFAULT_NAME,
-        update_method=async_update_data,
-        # Polling interval. Will only be polled if there are subscribers.
-        update_interval=SCAN_INTERVAL,
-    )
 
+async def create_foxess_coordinator(hass, config):
+    name = config.get(CONF_NAME, DEFAULT_NAME)
+    deviceID = config.get(CONF_DEVICEID, config.get(CONF_DEVICESN))
+    devicesn = config.get(CONF_DEVICESN)
+    apiKey = config.get(CONF_APIKEY)
+    ExtPV = config.get(CONF_EXTPV, False) is True
+    xtZone = config.get(CONF_XTZONE, False) is True
+    Restrict = config.get(CONF_GET_VARIABLES, False) is True
+    V1 = config.get(CONF_V1_API) is not False
+    evo = config.get(CONF_EVO, False) is True
+    refresh_interval = int(config.get(CONF_REFRESH_INTERVAL, SCAN_MINUTES))
+
+    _LOGGER.debug("Device SN: %s", devicesn)
+    _LOGGER.debug("Device ID: %s", deviceID)
+    _LOGGER.debug("FoxESS Scan Interval: %s minutes", refresh_interval)
+    _LOGGER.debug("Cross Time Zone: %s", xtZone)
+    _LOGGER.debug("Restrict Variables: %s", Restrict)
+    _LOGGER.debug("Extended PV: %s", ExtPV)
+    _LOGGER.debug("v1 Api Calls: %s", V1)
+    _LOGGER.debug("EVO: %s", evo)
+    if V1:
+        _LOGGER.debug("v1 Api Calls Enabled")
+    else:
+        _LOGGER.warning("v1 Api Calls Disabled, using v0")
+    if ExtPV:
+        _LOGGER.warning("Extended PV 1-18 strings enabled")
+    else:
+        _LOGGER.debug("Extended PV Disabled")
+    if Restrict:
+        _LOGGER.warning("Get Variables is in restricted mode")
+    else:
+        _LOGGER.debug("Get Variables is full variable mode")
+
+    coordinator = FoxESSCoordinator(
+        hass,
+        device_id=deviceID,
+        device_sn=devicesn,
+        api_key=apiKey,
+        name_prefix=name,
+        refresh_interval=refresh_interval,
+        ext_pv=ExtPV,
+        xt_zone=xtZone,
+        restrict_get_var=Restrict,
+        v1_api=V1,
+        evo=evo,
+    )
     await coordinator.async_refresh()
+    return coordinator
+
+
+def _build_entities(coordinator):
+    name = coordinator.name_prefix
+    deviceID = coordinator.device_id
+    entities = [
+        FoxESSCurrent(coordinator, name, deviceID, "PV1 Current", "pv1-current", "pv1Current"),
+        FoxESSPower(coordinator, name, deviceID, "PV1 Power", "pv1-power", "pv1Power"),
+        FoxESSVolt(coordinator, name, deviceID, "PV1 Volt", "pv1-volt", "pv1Volt"),
+        FoxESSCurrent(coordinator, name, deviceID, "PV2 Current", "pv2-current", "pv2Current"),
+        FoxESSPower(coordinator, name, deviceID, "PV2 Power", "pv2-power", "pv2Power"),
+        FoxESSVolt(coordinator, name, deviceID, "PV2 Volt", "pv2-volt", "pv2Volt"),
+        FoxESSCurrent(coordinator, name, deviceID, "PV3 Current", "pv3-current", "pv3Current"),
+        FoxESSPower(coordinator, name, deviceID, "PV3 Power", "pv3-power", "pv3Power"),
+        FoxESSVolt(coordinator, name, deviceID, "PV3 Volt", "pv3-volt", "pv3Volt"),
+        FoxESSCurrent(coordinator, name, deviceID, "PV4 Current", "pv4-current", "pv4Current"),
+        FoxESSPower(coordinator, name, deviceID, "PV4 Power", "pv4-power", "pv4Power"),
+        FoxESSVolt(coordinator, name, deviceID, "PV4 Volt", "pv4-volt", "pv4Volt"),
+        FoxESSCurrent(coordinator, name, deviceID, "PV5 Current", "pv5-current", "pv5Current"),
+        FoxESSPower(coordinator, name, deviceID, "PV5 Power", "pv5-power", "pv5Power"),
+        FoxESSVolt(coordinator, name, deviceID, "PV5 Volt", "pv5-volt", "pv5Volt"),
+        FoxESSCurrent(coordinator, name, deviceID, "PV6 Current", "pv6-current", "pv6Current"),
+        FoxESSPower(coordinator, name, deviceID, "PV6 Power", "pv6-power", "pv6Power"),
+        FoxESSVolt(coordinator, name, deviceID, "PV6 Volt", "pv6-volt", "pv6Volt"),
+        FoxESSPower(coordinator, name, deviceID, "PV Power", "pv-power", "pvPower"),
+        FoxESSCurrent(coordinator, name, deviceID, "R Current", "r-current", "RCurrent"),
+        FoxESSFreq(coordinator, name, deviceID, "R Freq", "r-freq", "RFreq"),
+        FoxESSPower(coordinator, name, deviceID, "R Power", "r-power", "RPower"),
+        FoxESSPowerString(coordinator, name, deviceID, "Meter2 Power", "meter2-power", "meterPower2"),
+        FoxESSVolt(coordinator, name, deviceID, "R Volt", "r-volt", "RVolt"),
+        FoxESSCurrent(coordinator, name, deviceID, "S Current", "s-current", "SCurrent"),
+        FoxESSFreq(coordinator, name, deviceID, "S Freq", "s-freq", "SFreq"),
+        FoxESSPower(coordinator, name, deviceID, "S Power", "s-power", "SPower"),
+        FoxESSVolt(coordinator, name, deviceID, "S Volt", "s-volt", "SVolt"),
+        FoxESSCurrent(coordinator, name, deviceID, "T Current", "t-current", "TCurrent"),
+        FoxESSFreq(coordinator, name, deviceID, "T Freq", "t-freq", "TFreq"),
+        FoxESSPower(coordinator, name, deviceID, "T Power", "t-power", "TPower"),
+        FoxESSVolt(coordinator, name, deviceID, "T Volt", "t-volt", "TVolt"),
+        FoxESSReactivePower(coordinator, name, deviceID),
+        FoxESSPowerFactor(coordinator, name, deviceID),
+        FoxESSTemp(coordinator, name, deviceID, "Bat Temperature", "bat-temperature", "batTemperature"),
+        FoxESSTemp(coordinator, name, deviceID, "Bat Temperature2", "bat-temperature2", "batTemperature_2"),
+        FoxESSTemp(coordinator, name, deviceID, "Ambient Temperature", "ambient-temperature", "ambientTemperation"),
+        FoxESSTemp(coordinator, name, deviceID, "Boost Temperature", "boost-temperature", "boostTemperation"),
+        FoxESSTemp(coordinator, name, deviceID, "Inv Temperature", "inv-temperature", "invTemperation"),
+        FoxESSBatSoC(coordinator, name, deviceID, "Bat SoC", "bat-soc", "SoC"),
+        FoxESSBatSoC(coordinator, name, deviceID, "Bat SoC1", "bat-soc1", "SoC_1"),
+        FoxESSBatSoC(coordinator, name, deviceID, "Bat SoC2", "bat-soc2", "SoC_2"),
+        FoxESSBatSoC(coordinator, name, deviceID, "Bat SoH", "bat-soh", "SOH"),
+        FoxESSPower(coordinator, name, deviceID, "Inverter Bat Power", "inv-Bat-Power", "invBatPower"),
+        FoxESSPower(coordinator, name, deviceID, "Inverter Bat Power2", "inv-Bat-Power2", "invBatPower_2"),
+        FoxESSBatMinSoC(coordinator, name, deviceID),
+        FoxESSBatMinSoConGrid(coordinator, name, deviceID),
+        FoxESSSolarPower(coordinator, name, deviceID),
+        FoxESSEnergyThroughput(coordinator, name, deviceID),
+        FoxESSEnergySolar(coordinator, name, deviceID),
+        FoxESSInverter(coordinator, name, deviceID),
+        FoxESSPowerString(coordinator, name, deviceID, "Generation Power", "-generation-power", "generationPower"),
+        FoxESSPowerString(coordinator, name, deviceID, "Grid Consumption Power", "grid-consumption-power", "gridConsumptionPower"),
+        FoxESSPowerString(coordinator, name, deviceID, "FeedIn Power", "feedIn-power", "feedinPower"),
+        FoxESSPowerString(coordinator, name, deviceID, "Bat Discharge Power", "bat-discharge-power", "batDischargePower"),
+        FoxESSPowerString(coordinator, name, deviceID, "Bat Charge Power", "bat-charge-power", "batChargePower"),
+        FoxESSPowerString(coordinator, name, deviceID, "Load Power", "load-power", "loadsPower"),
+        FoxESSEnergyGenerated(coordinator, name, deviceID, "Energy Generated", "energy-generated", "value"),
+        FoxESSEnergyGenerated(coordinator, name, deviceID, "Energy Generated Month", "energy-generated-month", "month"),
+        FoxESSEnergyGenerated(coordinator, name, deviceID, "Energy Generated Cumulative", "energy-generated-cumulative", "cumulative"),
+        FoxESSEnergyGridConsumption(coordinator, name, deviceID),
+        FoxESSEnergyFeedin(coordinator, name, deviceID),
+        FoxESSEnergyBatCharge(coordinator, name, deviceID),
+        FoxESSEnergyBatDischarge(coordinator, name, deviceID),
+        FoxESSEnergyLoad(coordinator, name, deviceID),
+        FoxESSPVEnergyTotal(coordinator, name, deviceID),
+        FoxESSResidualEnergy(coordinator, name, deviceID),
+        FoxESSResponseTime(coordinator, name, deviceID),
+        FoxESSRunningState(coordinator, name, deviceID, "Running State", "running-state", "runningState"),
+        FoxESSBatteryMode(coordinator, name, deviceID),
+        FoxESSApiCallCount(coordinator, name, deviceID),
+        # EPS (Emergency Power Supply) sensors
+        FoxESSPower(coordinator, name, deviceID, "EPS Power", "eps-power", "epsPower"),
+        FoxESSCurrent(coordinator, name, deviceID, "EPS Current R", "eps-current-r", "epsCurrentR"),
+        FoxESSCurrent(coordinator, name, deviceID, "EPS Current S", "eps-current-s", "epsCurrentS"),
+        FoxESSCurrent(coordinator, name, deviceID, "EPS Current T", "eps-current-t", "epsCurrentT"),
+        FoxESSPower(coordinator, name, deviceID, "EPS Power R", "eps-power-r", "epsPowerR"),
+        FoxESSPower(coordinator, name, deviceID, "EPS Power S", "eps-power-s", "epsPowerS"),
+        FoxESSPower(coordinator, name, deviceID, "EPS Power T", "eps-power-t", "epsPowerT"),
+        FoxESSVolt(coordinator, name, deviceID, "EPS Volt R", "eps-volt-r", "epsVoltR"),
+        FoxESSVolt(coordinator, name, deviceID, "EPS Volt S", "eps-volt-s", "epsVoltS"),
+        FoxESSVolt(coordinator, name, deviceID, "EPS Volt T", "eps-volt-t", "epsVoltT"),
+        # Fault diagnostics
+        FoxESSFaultCount(coordinator, name, deviceID),
+    ]
+
+    if coordinator.ext_pv:
+        entities.extend(
+            [
+                FoxESSCurrent(coordinator, name, deviceID, "PV7 Current", "pv7-current", "pv7Current"),
+                FoxESSPower(coordinator, name, deviceID, "PV7 Power", "pv7-power", "pv7Power"),
+                FoxESSVolt(coordinator, name, deviceID, "PV7 Volt", "pv7-volt", "pv7Volt"),
+                FoxESSCurrent(coordinator, name, deviceID, "PV8 Current", "pv8-current", "pv8Current"),
+                FoxESSPower(coordinator, name, deviceID, "PV8 Power", "pv8-power", "pv8Power"),
+                FoxESSVolt(coordinator, name, deviceID, "PV8 Volt", "pv8-volt", "pv8Volt"),
+                FoxESSCurrent(coordinator, name, deviceID, "PV9 Current", "pv9-current", "pv9Current"),
+                FoxESSPower(coordinator, name, deviceID, "PV9 Power", "pv9-power", "pv9Power"),
+                FoxESSVolt(coordinator, name, deviceID, "PV9 Volt", "pv9-volt", "pv9Volt"),
+                FoxESSCurrent(coordinator, name, deviceID, "PV10 Current", "pv10-current", "pv10Current"),
+                FoxESSPower(coordinator, name, deviceID, "PV10 Power", "pv10-power", "pv10Power"),
+                FoxESSVolt(coordinator, name, deviceID, "PV10 Volt", "pv10-volt", "pv10Volt"),
+                FoxESSCurrent(coordinator, name, deviceID, "PV11 Current", "pv11-current", "pv11Current"),
+                FoxESSPower(coordinator, name, deviceID, "PV11 Power", "pv11-power", "pv11Power"),
+                FoxESSVolt(coordinator, name, deviceID, "PV11 Volt", "pv11-volt", "pv11Volt"),
+                FoxESSCurrent(coordinator, name, deviceID, "PV12 Current", "pv12-current", "pv12Current"),
+                FoxESSPower(coordinator, name, deviceID, "PV12 Power", "pv12-power", "pv12Power"),
+                FoxESSVolt(coordinator, name, deviceID, "PV12 Volt", "pv12-volt", "pv12Volt"),
+                FoxESSCurrent(coordinator, name, deviceID, "PV13 Current", "pv13-current", "pv13Current"),
+                FoxESSPower(coordinator, name, deviceID, "PV13 Power", "pv13-power", "pv13Power"),
+                FoxESSVolt(coordinator, name, deviceID, "PV13 Volt", "pv13-volt", "pv13Volt"),
+                FoxESSCurrent(coordinator, name, deviceID, "PV14 Current", "pv14-current", "pv14Current"),
+                FoxESSPower(coordinator, name, deviceID, "PV14 Power", "pv14-power", "pv14Power"),
+                FoxESSVolt(coordinator, name, deviceID, "PV14 Volt", "pv14-volt", "pv14Volt"),
+                FoxESSCurrent(coordinator, name, deviceID, "PV15 Current", "pv15-current", "pv15Current"),
+                FoxESSPower(coordinator, name, deviceID, "PV15 Power", "pv15-power", "pv15Power"),
+                FoxESSVolt(coordinator, name, deviceID, "PV15 Volt", "pv15-volt", "pv15Volt"),
+                FoxESSCurrent(coordinator, name, deviceID, "PV16 Current", "pv16-current", "pv16Current"),
+                FoxESSPower(coordinator, name, deviceID, "PV16 Power", "pv16-power", "pv16Power"),
+                FoxESSVolt(coordinator, name, deviceID, "PV16 Volt", "pv16-volt", "pv16Volt"),
+                FoxESSCurrent(coordinator, name, deviceID, "PV17 Current", "pv17-current", "pv17Current"),
+                FoxESSPower(coordinator, name, deviceID, "PV17 Power", "pv17-power", "pv17Power"),
+                FoxESSVolt(coordinator, name, deviceID, "PV17 Volt", "pv17-volt", "pv17Volt"),
+                FoxESSCurrent(coordinator, name, deviceID, "PV18 Current", "pv18-current", "pv18Current"),
+                FoxESSPower(coordinator, name, deviceID, "PV18 Power", "pv18-power", "pv18Power"),
+                FoxESSVolt(coordinator, name, deviceID, "PV18 Volt", "pv18-volt", "pv18Volt"),
+            ]
+        )
+
+    return entities
+
+
+async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
+    """Set up the FoxESS sensor."""
+    coordinator = await create_foxess_coordinator(hass, config)
 
     if not coordinator.last_update_success:
         _LOGGER.error(
@@ -293,406 +491,7 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
         )
         return False
 
-    async_add_entities(
-        [
-            FoxESSCurrent(
-                coordinator, name, deviceID, "PV1 Current", "pv1-current", "pv1Current"
-            ),
-            FoxESSPower(
-                coordinator, name, deviceID, "PV1 Power", "pv1-power", "pv1Power"
-            ),
-            FoxESSVolt(coordinator, name, deviceID, "PV1 Volt", "pv1-volt", "pv1Volt"),
-            FoxESSCurrent(
-                coordinator, name, deviceID, "PV2 Current", "pv2-current", "pv2Current"
-            ),
-            FoxESSPower(
-                coordinator, name, deviceID, "PV2 Power", "pv2-power", "pv2Power"
-            ),
-            FoxESSVolt(coordinator, name, deviceID, "PV2 Volt", "pv2-volt", "pv2Volt"),
-            FoxESSCurrent(
-                coordinator, name, deviceID, "PV3 Current", "pv3-current", "pv3Current"
-            ),
-            FoxESSPower(
-                coordinator, name, deviceID, "PV3 Power", "pv3-power", "pv3Power"
-            ),
-            FoxESSVolt(coordinator, name, deviceID, "PV3 Volt", "pv3-volt", "pv3Volt"),
-            FoxESSCurrent(
-                coordinator, name, deviceID, "PV4 Current", "pv4-current", "pv4Current"
-            ),
-            FoxESSPower(
-                coordinator, name, deviceID, "PV4 Power", "pv4-power", "pv4Power"
-            ),
-            FoxESSVolt(coordinator, name, deviceID, "PV4 Volt", "pv4-volt", "pv4Volt"),
-            FoxESSCurrent(
-                coordinator, name, deviceID, "PV5 Current", "pv5-current", "pv5Current"
-            ),
-            FoxESSPower(
-                coordinator, name, deviceID, "PV5 Power", "pv5-power", "pv5Power"
-            ),
-            FoxESSVolt(coordinator, name, deviceID, "PV5 Volt", "pv5-volt", "pv5Volt"),
-            FoxESSCurrent(
-                coordinator, name, deviceID, "PV6 Current", "pv6-current", "pv6Current"
-            ),
-            FoxESSPower(
-                coordinator, name, deviceID, "PV6 Power", "pv6-power", "pv6Power"
-            ),
-            FoxESSVolt(coordinator, name, deviceID, "PV6 Volt", "pv6-volt", "pv6Volt"),
-            FoxESSPower(coordinator, name, deviceID, "PV Power", "pv-power", "pvPower"),
-            FoxESSCurrent(
-                coordinator, name, deviceID, "R Current", "r-current", "RCurrent"
-            ),
-            FoxESSFreq(coordinator, name, deviceID, "R Freq", "r-freq", "RFreq"),
-            FoxESSPower(coordinator, name, deviceID, "R Power", "r-power", "RPower"),
-            FoxESSPowerString(
-                coordinator,
-                name,
-                deviceID,
-                "Meter2 Power",
-                "meter2-power",
-                "meterPower2",
-            ),
-            FoxESSVolt(coordinator, name, deviceID, "R Volt", "r-volt", "RVolt"),
-            FoxESSCurrent(
-                coordinator, name, deviceID, "S Current", "s-current", "SCurrent"
-            ),
-            FoxESSFreq(coordinator, name, deviceID, "S Freq", "s-freq", "SFreq"),
-            FoxESSPower(coordinator, name, deviceID, "S Power", "s-power", "SPower"),
-            FoxESSVolt(coordinator, name, deviceID, "S Volt", "s-volt", "SVolt"),
-            FoxESSCurrent(
-                coordinator, name, deviceID, "T Current", "t-current", "TCurrent"
-            ),
-            FoxESSFreq(coordinator, name, deviceID, "T Freq", "t-freq", "TFreq"),
-            FoxESSPower(coordinator, name, deviceID, "T Power", "t-power", "TPower"),
-            FoxESSVolt(coordinator, name, deviceID, "T Volt", "t-volt", "TVolt"),
-            FoxESSReactivePower(coordinator, name, deviceID),
-            FoxESSPowerFactor(coordinator, name, deviceID),
-            FoxESSTemp(
-                coordinator,
-                name,
-                deviceID,
-                "Bat Temperature",
-                "bat-temperature",
-                "batTemperature",
-            ),
-            FoxESSTemp(
-                coordinator,
-                name,
-                deviceID,
-                "Bat Temperature2",
-                "bat-temperature2",
-                "batTemperature_2",
-            ),
-            FoxESSTemp(
-                coordinator,
-                name,
-                deviceID,
-                "Ambient Temperature",
-                "ambient-temperature",
-                "ambientTemperation",
-            ),
-            FoxESSTemp(
-                coordinator,
-                name,
-                deviceID,
-                "Boost Temperature",
-                "boost-temperature",
-                "boostTemperation",
-            ),
-            FoxESSTemp(
-                coordinator,
-                name,
-                deviceID,
-                "Inv Temperature",
-                "inv-temperature",
-                "invTemperation",
-            ),
-            FoxESSBatSoC(coordinator, name, deviceID, "Bat SoC", "bat-soc", "SoC"),
-            FoxESSBatSoC(coordinator, name, deviceID, "Bat SoC1", "bat-soc1", "SoC_1"),
-            FoxESSBatSoC(coordinator, name, deviceID, "Bat SoC2", "bat-soc2", "SoC_2"),
-            FoxESSBatSoC(coordinator, name, deviceID, "Bat SoH", "bat-soh", "SOH"),
-            FoxESSPower(
-                coordinator,
-                name,
-                deviceID,
-                "Inverter Bat Power",
-                "inv-Bat-Power",
-                "invBatPower",
-            ),
-            FoxESSPower(
-                coordinator,
-                name,
-                deviceID,
-                "Inverter Bat Power2",
-                "inv-Bat-Power2",
-                "invBatPower_2",
-            ),
-            FoxESSBatMinSoC(coordinator, name, deviceID),
-            FoxESSBatMinSoConGrid(coordinator, name, deviceID),
-            FoxESSSolarPower(coordinator, name, deviceID),
-            FoxESSEnergyThroughput(coordinator, name, deviceID),
-            FoxESSEnergySolar(coordinator, name, deviceID),
-            FoxESSInverter(coordinator, name, deviceID),
-            FoxESSPowerString(
-                coordinator,
-                name,
-                deviceID,
-                "Generation Power",
-                "-generation-power",
-                "generationPower",
-            ),
-            FoxESSPowerString(
-                coordinator,
-                name,
-                deviceID,
-                "Grid Consumption Power",
-                "grid-consumption-power",
-                "gridConsumptionPower",
-            ),
-            FoxESSPowerString(
-                coordinator,
-                name,
-                deviceID,
-                "FeedIn Power",
-                "feedIn-power",
-                "feedinPower",
-            ),
-            FoxESSPowerString(
-                coordinator,
-                name,
-                deviceID,
-                "Bat Discharge Power",
-                "bat-discharge-power",
-                "batDischargePower",
-            ),
-            FoxESSPowerString(
-                coordinator,
-                name,
-                deviceID,
-                "Bat Charge Power",
-                "bat-charge-power",
-                "batChargePower",
-            ),
-            FoxESSPowerString(
-                coordinator, name, deviceID, "Load Power", "load-power", "loadsPower"
-            ),
-            FoxESSEnergyGenerated(
-                coordinator,
-                name,
-                deviceID,
-                "Energy Generated",
-                "energy-generated",
-                "value",
-            ),
-            FoxESSEnergyGenerated(
-                coordinator,
-                name,
-                deviceID,
-                "Energy Generated Month",
-                "energy-generated-month",
-                "month",
-            ),
-            FoxESSEnergyGenerated(
-                coordinator,
-                name,
-                deviceID,
-                "Energy Generated Cumulative",
-                "energy-generated-cumulative",
-                "cumulative",
-            ),
-            FoxESSEnergyGridConsumption(coordinator, name, deviceID),
-            FoxESSEnergyFeedin(coordinator, name, deviceID),
-            FoxESSEnergyBatCharge(coordinator, name, deviceID),
-            FoxESSEnergyBatDischarge(coordinator, name, deviceID),
-            FoxESSEnergyLoad(coordinator, name, deviceID),
-            FoxESSPVEnergyTotal(coordinator, name, deviceID),
-            FoxESSResidualEnergy(coordinator, name, deviceID),
-            FoxESSResponseTime(coordinator, name, deviceID),
-            FoxESSMaxBatChargeCurrent(coordinator, name, deviceID),
-            FoxESSMaxBatDischargeCurrent(coordinator, name, deviceID),
-            FoxESSRunningState(
-                coordinator,
-                name,
-                deviceID,
-                "Running State",
-                "running-state",
-                "runningState",
-            ),
-        ]
-    )
-
-    if ExtPV:
-        async_add_entities(
-            [
-                FoxESSCurrent(
-                    coordinator,
-                    name,
-                    deviceID,
-                    "PV7 Current",
-                    "pv7-current",
-                    "pv7Current",
-                ),
-                FoxESSPower(
-                    coordinator, name, deviceID, "PV7 Power", "pv7-power", "pv7Power"
-                ),
-                FoxESSVolt(
-                    coordinator, name, deviceID, "PV7 Volt", "pv7-volt", "pv7Volt"
-                ),
-                FoxESSCurrent(
-                    coordinator,
-                    name,
-                    deviceID,
-                    "PV8 Current",
-                    "pv8-current",
-                    "pv8Current",
-                ),
-                FoxESSPower(
-                    coordinator, name, deviceID, "PV8 Power", "pv8-power", "pv8Power"
-                ),
-                FoxESSVolt(
-                    coordinator, name, deviceID, "PV8 Volt", "pv8-volt", "pv8Volt"
-                ),
-                FoxESSCurrent(
-                    coordinator,
-                    name,
-                    deviceID,
-                    "PV9 Current",
-                    "pv9-current",
-                    "pv9Current",
-                ),
-                FoxESSPower(
-                    coordinator, name, deviceID, "PV9 Power", "pv9-power", "pv9Power"
-                ),
-                FoxESSVolt(
-                    coordinator, name, deviceID, "PV9 Volt", "pv9-volt", "pv9Volt"
-                ),
-                FoxESSCurrent(
-                    coordinator,
-                    name,
-                    deviceID,
-                    "PV10 Current",
-                    "pv10-current",
-                    "pv10Current",
-                ),
-                FoxESSPower(
-                    coordinator, name, deviceID, "PV10 Power", "pv10-power", "pv10Power"
-                ),
-                FoxESSVolt(
-                    coordinator, name, deviceID, "PV10 Volt", "pv10-volt", "pv10Volt"
-                ),
-                FoxESSCurrent(
-                    coordinator,
-                    name,
-                    deviceID,
-                    "PV11 Current",
-                    "pv11-current",
-                    "pv11Current",
-                ),
-                FoxESSPower(
-                    coordinator, name, deviceID, "PV11 Power", "pv11-power", "pv11Power"
-                ),
-                FoxESSVolt(
-                    coordinator, name, deviceID, "PV11 Volt", "pv11-volt", "pv11Volt"
-                ),
-                FoxESSCurrent(
-                    coordinator,
-                    name,
-                    deviceID,
-                    "PV12 Current",
-                    "pv12-current",
-                    "pv12Current",
-                ),
-                FoxESSPower(
-                    coordinator, name, deviceID, "PV12 Power", "pv12-power", "pv12Power"
-                ),
-                FoxESSVolt(
-                    coordinator, name, deviceID, "PV12 Volt", "pv12-volt", "pv12Volt"
-                ),
-                FoxESSCurrent(
-                    coordinator,
-                    name,
-                    deviceID,
-                    "PV13 Current",
-                    "pv13-current",
-                    "pv13Current",
-                ),
-                FoxESSPower(
-                    coordinator, name, deviceID, "PV13 Power", "pv13-power", "pv13Power"
-                ),
-                FoxESSVolt(
-                    coordinator, name, deviceID, "PV13 Volt", "pv13-volt", "pv13Volt"
-                ),
-                FoxESSCurrent(
-                    coordinator,
-                    name,
-                    deviceID,
-                    "PV14 Current",
-                    "pv14-current",
-                    "pv14Current",
-                ),
-                FoxESSPower(
-                    coordinator, name, deviceID, "PV14 Power", "pv14-power", "pv14Power"
-                ),
-                FoxESSVolt(
-                    coordinator, name, deviceID, "PV14 Volt", "pv14-volt", "pv14Volt"
-                ),
-                FoxESSCurrent(
-                    coordinator,
-                    name,
-                    deviceID,
-                    "PV15 Current",
-                    "pv15-current",
-                    "pv15Current",
-                ),
-                FoxESSPower(
-                    coordinator, name, deviceID, "PV15 Power", "pv15-power", "pv15Power"
-                ),
-                FoxESSVolt(
-                    coordinator, name, deviceID, "PV15 Volt", "pv15-volt", "pv15Volt"
-                ),
-                FoxESSCurrent(
-                    coordinator,
-                    name,
-                    deviceID,
-                    "PV16 Current",
-                    "pv16-current",
-                    "pv16Current",
-                ),
-                FoxESSPower(
-                    coordinator, name, deviceID, "PV16 Power", "pv16-power", "pv16Power"
-                ),
-                FoxESSVolt(
-                    coordinator, name, deviceID, "PV16 Volt", "pv16-volt", "pv16Volt"
-                ),
-                FoxESSCurrent(
-                    coordinator,
-                    name,
-                    deviceID,
-                    "PV17 Current",
-                    "pv17-current",
-                    "pv17Current",
-                ),
-                FoxESSPower(
-                    coordinator, name, deviceID, "PV17 Power", "pv17-power", "pv17Power"
-                ),
-                FoxESSVolt(
-                    coordinator, name, deviceID, "PV17 Volt", "pv17-volt", "pv17Volt"
-                ),
-                FoxESSCurrent(
-                    coordinator,
-                    name,
-                    deviceID,
-                    "PV18 Current",
-                    "pv18-current",
-                    "pv18Current",
-                ),
-                FoxESSPower(
-                    coordinator, name, deviceID, "PV18 Power", "pv18-power", "pv18Power"
-                ),
-                FoxESSVolt(
-                    coordinator, name, deviceID, "PV18 Volt", "pv18-volt", "pv18Volt"
-                ),
-            ]
-        )
+    async_add_entities(_build_entities(coordinator))
 
 
 class GetAuth:
@@ -722,6 +521,7 @@ class GetAuth:
 
     @staticmethod
     def md5c(text="", _type="lower"):
+        # lgtm[py/weak-sensitive-data-hashing] FoxESS OpenAPI requires an MD5 request signature.
         res = hashlib.md5(text.encode(encoding="UTF-8")).hexdigest()
         if _type.__eq__("lower"):
             return res
@@ -729,26 +529,31 @@ class GetAuth:
             return res.upper()
 
 
-async def waitforAPI():
+async def waitforAPI(coordinator=None):
     global last_api
     # wait for openAPI, there is a minimum of 1 second allowed between OpenAPI query calls
     # check if last_api call was less than a second ago and if so delay the balance of 1 second
     now = time.time()
-    last = last_api
+    last = coordinator._last_api if coordinator is not None else last_api
     diff = now - last if last != 0 else 1
     diff = round((diff + 0.2), 2)
     if diff < 1:
         await asyncio.sleep(diff)
         _LOGGER.debug("API enforced delay, wait: %s", diff)
     now = time.time()
-    last_api = now
+    if coordinator is not None:
+        coordinator._last_api = now
+        coordinator.increment_api_call()
+    else:
+        last_api = now
     return False
 
 
-async def getOADeviceDetail(hass, allData, devicesn, apiKey):
-    await waitforAPI()
+async def getOADeviceDetail(hass, allData, devicesn, apiKey, coordinator=None):
+    await waitforAPI(coordinator)
 
-    if V1_Api:
+    v1_api = coordinator.v1_api if coordinator is not None else V1_Api
+    if v1_api:
         path = _ENDPOINT_OA_DEVICE_DETAIL_V1
         _LOGGER.debug("Device Detail using V1 API")
     else:
@@ -804,8 +609,8 @@ async def getOADeviceDetail(hass, allData, devicesn, apiKey):
             return True
 
 
-async def getOADeviceList(hass, allData, devicesn, apiKey):
-    await waitforAPI()
+async def getOADeviceList(hass, allData, devicesn, apiKey, coordinator=None):
+    await waitforAPI(coordinator)
 
     path = "/op/v0/device/list"
     headerData = GetAuth().get_signature(token=apiKey, path=path)
@@ -870,8 +675,8 @@ async def getOADeviceList(hass, allData, devicesn, apiKey):
             return True
 
 
-async def getOABatterySettings(hass, allData, devicesn, apiKey):
-    await waitforAPI()  # check for api delay
+async def getOABatterySettings(hass, allData, devicesn, apiKey, coordinator=None):
+    await waitforAPI(coordinator)  # check for api delay
 
     path = "/op/v0/device/battery/soc/get"
     headerData = GetAuth().get_signature(token=apiKey, path=path)
@@ -930,8 +735,8 @@ async def getOABatterySettings(hass, allData, devicesn, apiKey):
         return False
 
 
-async def getReport(hass, allData, apiKey, devicesn):
-    await waitforAPI()  # check for api delay
+async def getReport(hass, allData, apiKey, devicesn, coordinator=None):
+    await waitforAPI(coordinator)  # check for api delay
 
     path = _ENDPOINT_OA_REPORT
     headerData = GetAuth().get_signature(token=apiKey, path=path)
@@ -1009,8 +814,45 @@ async def getReport(hass, allData, apiKey, devicesn):
             return True
 
 
-async def getReportDailyGeneration(hass, allData, apiKey, devicesn):
-    await waitforAPI()  # check for api delay
+async def getWorkMode(hass, allData, devicesn, apiKey, coordinator=None):
+    await waitforAPI(coordinator)
+
+    path = "/op/v0/device/setting/get"
+    headerData = GetAuth().get_signature(token=apiKey, path=path)
+    workModeData = json.dumps({"sn": devicesn, "key": "WorkMode"})
+
+    restOAWorkMode = RestData(
+        hass,
+        METHOD_GET,
+        _ENDPOINT_OA_DOMAIN + path,
+        DEFAULT_ENCODING,
+        None,
+        headerData,
+        None,
+        workModeData,
+        DEFAULT_VERIFY_SSL,
+        SSLCipherList.PYTHON_DEFAULT,
+        DEFAULT_TIMEOUT,
+    )
+
+    await restOAWorkMode.async_update()
+
+    if restOAWorkMode.data is None or restOAWorkMode.data == "":
+        _LOGGER.debug("Unable to get OA Work Mode from FoxESS Cloud")
+        return True
+
+    response = json.loads(restOAWorkMode.data)
+    if response["errno"] == 0 and (response["msg"] == 'success' or response["msg"] == 'Operation successful'):
+        allData["workMode"] = response.get("result", {}).get("value")
+        _LOGGER.debug("OA Work Mode fetched: %s", allData["workMode"])
+        return False
+
+    _LOGGER.debug("OA Work Mode Bad Response: %s", response)
+    return True
+
+
+async def getReportDailyGeneration(hass, allData, apiKey, devicesn, coordinator=None):
+    await waitforAPI(coordinator)  # check for api delay
 
     path = "/op/v0/device/generation"
     headerData = GetAuth().get_signature(token=apiKey, path=path)
@@ -1094,21 +936,26 @@ async def getReportDailyGeneration(hass, allData, apiKey, devicesn):
             return True
 
 
-async def getRaw(hass, allData, apiKey, devicesn):
-    await waitforAPI()  # check for api delay
+async def getRaw(hass, allData, apiKey, devicesn, coordinator=None):
+    await waitforAPI(coordinator)  # check for api delay
 
     # "deviceSN" used for OpenAPI and it only fetches the real time data
 
     # build the devicesn string
-    if V1_Api:
+    v1_api = coordinator.v1_api if coordinator is not None else V1_Api
+    if v1_api:
         dsn = '{"sns":["' + devicesn + '"] }' 
     else:
         dsn = '{"sn":"' + devicesn + '" }' 
 
-    if RestrictGetVar:
+    restrict_get_var = coordinator.restrict_get_var if coordinator is not None else RestrictGetVar
+    v1_api = coordinator.v1_api if coordinator is not None else V1_Api
+    xt_zone = coordinator.xt_zone if coordinator is not None else xtzone
+
+    if restrict_get_var:
         _LOGGER.debug("Getting Device Variable in restricted mode")
         # build the devicesn string
-        if V1_Api:
+        if v1_api:
             dsn = '{"sns":["' + devicesn + '"] ' 
         else:
             dsn = '{"sn":"' + devicesn + '"' 
@@ -1123,7 +970,7 @@ async def getRaw(hass, allData, apiKey, devicesn):
 
     timestamp = round(time.time() * 1000)
 
-    if V1_Api:
+    if v1_api:
         path = _ENDPOINT_OA_DEVICE_VARIABLES_V1
         _LOGGER.debug("Using V1 API")
     else:
@@ -1195,7 +1042,7 @@ async def getRaw(hass, allData, apiKey, devicesn):
                 tsrcv = (parser.parse(timercv, ignoretz=True)).timestamp()
                 zulu = datetime.now().astimezone().strftime("%z")
                 if zulu != tzfull:
-                    if xtzone:
+                    if xt_zone:
                         _LOGGER.debug(
                             "OA Variables tsrcv applying offset: %s, offset: %s, zulu: %s",
                             tsrcv,
@@ -1320,7 +1167,28 @@ async def getRaw(hass, allData, apiKey, devicesn):
             return True
 
 
-class FoxESSPowerString(CoordinatorEntity, SensorEntity):
+class FoxESSBaseEntity(CoordinatorEntity):
+    @property
+    def device_info(self):
+        from homeassistant.helpers.entity import DeviceInfo
+
+        info = DeviceInfo(
+            identifiers={(DOMAIN, self.coordinator.device_id)},
+            name=self.coordinator.name_prefix,
+            manufacturer="FoxESS",
+        )
+        if self.coordinator.data and "addressbook" in self.coordinator.data:
+            ab = self.coordinator.data["addressbook"]
+            model = ab.get("deviceType")
+            if model:
+                info["model"] = model
+            sw = ab.get("masterVersion")
+            if sw and sw != "not provided":
+                info["sw_version"] = sw
+        return info
+
+
+class FoxESSPowerString(FoxESSBaseEntity, SensorEntity):
     _attr_state_class: SensorStateClass = SensorStateClass.MEASUREMENT
     _attr_device_class = SensorDeviceClass.POWER
     _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
@@ -1351,7 +1219,7 @@ class FoxESSPowerString(CoordinatorEntity, SensorEntity):
         return None
 
 
-class FoxESSCurrent(CoordinatorEntity, SensorEntity):
+class FoxESSCurrent(FoxESSBaseEntity, SensorEntity):
     _attr_state_class: SensorStateClass = SensorStateClass.MEASUREMENT
     _attr_device_class = SensorDeviceClass.CURRENT
     _attr_native_unit_of_measurement = UnitOfElectricCurrent.AMPERE
@@ -1382,7 +1250,7 @@ class FoxESSCurrent(CoordinatorEntity, SensorEntity):
         return None
 
 
-class FoxESSFreq(CoordinatorEntity, SensorEntity):
+class FoxESSFreq(FoxESSBaseEntity, SensorEntity):
     _attr_state_class: SensorStateClass = SensorStateClass.MEASUREMENT
     _attr_device_class = SensorDeviceClass.FREQUENCY
     _attr_native_unit_of_measurement = UnitOfFrequency.HERTZ
@@ -1413,7 +1281,7 @@ class FoxESSFreq(CoordinatorEntity, SensorEntity):
         return None
 
 
-class FoxESSPower(CoordinatorEntity, SensorEntity):
+class FoxESSPower(FoxESSBaseEntity, SensorEntity):
     _attr_state_class: SensorStateClass = SensorStateClass.MEASUREMENT
     _attr_device_class = SensorDeviceClass.POWER
     _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
@@ -1444,7 +1312,7 @@ class FoxESSPower(CoordinatorEntity, SensorEntity):
         return None
 
 
-class FoxESSVolt(CoordinatorEntity, SensorEntity):
+class FoxESSVolt(FoxESSBaseEntity, SensorEntity):
     _attr_state_class: SensorStateClass = SensorStateClass.MEASUREMENT
     _attr_device_class = SensorDeviceClass.VOLTAGE
     _attr_native_unit_of_measurement = UnitOfElectricPotential.VOLT
@@ -1475,7 +1343,7 @@ class FoxESSVolt(CoordinatorEntity, SensorEntity):
         return None
 
 
-class FoxESSReactivePower(CoordinatorEntity, SensorEntity):
+class FoxESSReactivePower(FoxESSBaseEntity, SensorEntity):
     _attr_state_class: SensorStateClass = SensorStateClass.MEASUREMENT
     _attr_device_class = SensorDeviceClass.REACTIVE_POWER
     _attr_native_unit_of_measurement = UnitOfReactivePower.VOLT_AMPERE_REACTIVE
@@ -1503,7 +1371,7 @@ class FoxESSReactivePower(CoordinatorEntity, SensorEntity):
         return None
 
 
-class FoxESSPowerFactor(CoordinatorEntity, SensorEntity):
+class FoxESSPowerFactor(FoxESSBaseEntity, SensorEntity):
     _attr_state_class: SensorStateClass = SensorStateClass.MEASUREMENT
     _attr_device_class = SensorDeviceClass.POWER_FACTOR
     _attr_native_unit_of_measurement = PERCENTAGE
@@ -1531,7 +1399,7 @@ class FoxESSPowerFactor(CoordinatorEntity, SensorEntity):
         return None
 
 
-class FoxESSEnergyGenerated(CoordinatorEntity, SensorEntity):
+class FoxESSEnergyGenerated(FoxESSBaseEntity, SensorEntity):
     _attr_state_class: SensorStateClass = SensorStateClass.TOTAL_INCREASING
     _attr_device_class = SensorDeviceClass.ENERGY
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
@@ -1571,7 +1439,7 @@ class FoxESSEnergyGenerated(CoordinatorEntity, SensorEntity):
         return None
 
 
-class FoxESSEnergyThroughput(CoordinatorEntity, SensorEntity):
+class FoxESSEnergyThroughput(FoxESSBaseEntity, SensorEntity):
     _attr_state_class: SensorStateClass = SensorStateClass.TOTAL_INCREASING
     _attr_device_class = SensorDeviceClass.ENERGY
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
@@ -1606,7 +1474,7 @@ class FoxESSEnergyThroughput(CoordinatorEntity, SensorEntity):
         return None
 
 
-class FoxESSEnergyGridConsumption(CoordinatorEntity, SensorEntity):
+class FoxESSEnergyGridConsumption(FoxESSBaseEntity, SensorEntity):
     _attr_state_class: SensorStateClass = SensorStateClass.TOTAL_INCREASING
     _attr_device_class = SensorDeviceClass.ENERGY
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
@@ -1637,7 +1505,7 @@ class FoxESSEnergyGridConsumption(CoordinatorEntity, SensorEntity):
         return None
 
 
-class FoxESSEnergyFeedin(CoordinatorEntity, SensorEntity):
+class FoxESSEnergyFeedin(FoxESSBaseEntity, SensorEntity):
     _attr_state_class: SensorStateClass = SensorStateClass.TOTAL_INCREASING
     _attr_device_class = SensorDeviceClass.ENERGY
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
@@ -1668,7 +1536,7 @@ class FoxESSEnergyFeedin(CoordinatorEntity, SensorEntity):
         return None
 
 
-class FoxESSEnergyBatCharge(CoordinatorEntity, SensorEntity):
+class FoxESSEnergyBatCharge(FoxESSBaseEntity, SensorEntity):
     _attr_state_class: SensorStateClass = SensorStateClass.TOTAL_INCREASING
     _attr_device_class = SensorDeviceClass.ENERGY
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
@@ -1698,7 +1566,7 @@ class FoxESSEnergyBatCharge(CoordinatorEntity, SensorEntity):
             return energycharge
         return None
 
-class FoxESSMaxBatChargeCurrent(CoordinatorEntity, SensorEntity):
+class FoxESSMaxBatChargeCurrent(FoxESSBaseEntity, SensorEntity):
     _attr_state_class: SensorStateClass = SensorStateClass.MEASUREMENT
     _attr_device_class = SensorDeviceClass.CURRENT
     _attr_native_unit_of_measurement = UnitOfElectricCurrent.AMPERE
@@ -1728,7 +1596,7 @@ class FoxESSMaxBatChargeCurrent(CoordinatorEntity, SensorEntity):
             return charge
         return None
 
-class FoxESSMaxBatDischargeCurrent(CoordinatorEntity, SensorEntity):
+class FoxESSMaxBatDischargeCurrent(FoxESSBaseEntity, SensorEntity):
     _attr_state_class: SensorStateClass = SensorStateClass.MEASUREMENT
     _attr_device_class = SensorDeviceClass.CURRENT
     _attr_native_unit_of_measurement = UnitOfElectricCurrent.AMPERE
@@ -1759,7 +1627,7 @@ class FoxESSMaxBatDischargeCurrent(CoordinatorEntity, SensorEntity):
         return None
 
 
-class FoxESSEnergyBatDischarge(CoordinatorEntity, SensorEntity):
+class FoxESSEnergyBatDischarge(FoxESSBaseEntity, SensorEntity):
     _attr_state_class: SensorStateClass = SensorStateClass.TOTAL_INCREASING
     _attr_device_class = SensorDeviceClass.ENERGY
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
@@ -1792,7 +1660,7 @@ class FoxESSEnergyBatDischarge(CoordinatorEntity, SensorEntity):
         return None
 
 
-class FoxESSEnergyLoad(CoordinatorEntity, SensorEntity):
+class FoxESSEnergyLoad(FoxESSBaseEntity, SensorEntity):
     _attr_state_class: SensorStateClass = SensorStateClass.TOTAL_INCREASING
     _attr_device_class = SensorDeviceClass.ENERGY
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
@@ -1824,7 +1692,7 @@ class FoxESSEnergyLoad(CoordinatorEntity, SensorEntity):
         return None
 
 
-class FoxESSPVEnergyTotal(CoordinatorEntity, SensorEntity):
+class FoxESSPVEnergyTotal(FoxESSBaseEntity, SensorEntity):
     _attr_state_class: SensorStateClass = SensorStateClass.TOTAL_INCREASING
     _attr_device_class = SensorDeviceClass.ENERGY
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
@@ -1856,7 +1724,7 @@ class FoxESSPVEnergyTotal(CoordinatorEntity, SensorEntity):
         return None
 
 
-class FoxESSInverter(CoordinatorEntity, SensorEntity):
+class FoxESSInverter(FoxESSBaseEntity, SensorEntity):
     def __init__(self, coordinator, name, deviceID):
         super().__init__(coordinator=coordinator)
         _LOGGER.debug("Initiating Entity - Inverter")
@@ -1916,7 +1784,7 @@ class FoxESSInverter(CoordinatorEntity, SensorEntity):
         }
 
 
-class FoxESSRunningState(CoordinatorEntity, SensorEntity):
+class FoxESSRunningState(FoxESSBaseEntity, SensorEntity):
     def __init__(self, coordinator, name, deviceID, nameValue, uniqueValue, keyValue):
         super().__init__(coordinator=coordinator)
         self._nameValue = nameValue
@@ -1970,7 +1838,7 @@ class FoxESSRunningState(CoordinatorEntity, SensorEntity):
         return None
 
 
-class FoxESSEnergySolar(CoordinatorEntity, SensorEntity):
+class FoxESSEnergySolar(FoxESSBaseEntity, SensorEntity):
     _attr_state_class: SensorStateClass = SensorStateClass.TOTAL_INCREASING
     _attr_device_class = SensorDeviceClass.ENERGY
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
@@ -2021,7 +1889,7 @@ class FoxESSEnergySolar(CoordinatorEntity, SensorEntity):
         return round(energysolar, 3)
 
 
-class FoxESSSolarPower(CoordinatorEntity, SensorEntity):
+class FoxESSSolarPower(FoxESSBaseEntity, SensorEntity):
     _attr_state_class: SensorStateClass = SensorStateClass.MEASUREMENT
     _attr_device_class = SensorDeviceClass.POWER
     _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
@@ -2081,7 +1949,7 @@ class FoxESSSolarPower(CoordinatorEntity, SensorEntity):
         return round(total, 3)
 
 
-class FoxESSBatSoC(CoordinatorEntity, SensorEntity):
+class FoxESSBatSoC(FoxESSBaseEntity, SensorEntity):
     _attr_state_class: SensorStateClass = SensorStateClass.MEASUREMENT
     _attr_device_class = SensorDeviceClass.BATTERY
     _attr_native_unit_of_measurement = "%"
@@ -2116,7 +1984,7 @@ class FoxESSBatSoC(CoordinatorEntity, SensorEntity):
         return icon_for_battery_level(battery_level=self.native_value, charging=None)
 
 
-class FoxESSBatMinSoC(CoordinatorEntity, SensorEntity):
+class FoxESSBatMinSoC(FoxESSBaseEntity, SensorEntity):
     _attr_device_class = SensorDeviceClass.BATTERY
     _attr_native_unit_of_measurement = "%"
 
@@ -2147,7 +2015,7 @@ class FoxESSBatMinSoC(CoordinatorEntity, SensorEntity):
         return icon_for_battery_level(battery_level=self.native_value, charging=None)
 
 
-class FoxESSBatMinSoConGrid(CoordinatorEntity, SensorEntity):
+class FoxESSBatMinSoConGrid(FoxESSBaseEntity, SensorEntity):
     _attr_device_class = SensorDeviceClass.BATTERY
     _attr_native_unit_of_measurement = "%"
 
@@ -2178,7 +2046,7 @@ class FoxESSBatMinSoConGrid(CoordinatorEntity, SensorEntity):
         return icon_for_battery_level(battery_level=self.native_value, charging=None)
 
 
-class FoxESSTemp(CoordinatorEntity, SensorEntity):
+class FoxESSTemp(FoxESSBaseEntity, SensorEntity):
     _attr_state_class: SensorStateClass = SensorStateClass.MEASUREMENT
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
@@ -2209,7 +2077,7 @@ class FoxESSTemp(CoordinatorEntity, SensorEntity):
         return None
 
 
-class FoxESSResidualEnergy(CoordinatorEntity, SensorEntity):
+class FoxESSResidualEnergy(FoxESSBaseEntity, SensorEntity):
     _attr_device_class = SensorDeviceClass.ENERGY
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
 
@@ -2242,7 +2110,7 @@ class FoxESSResidualEnergy(CoordinatorEntity, SensorEntity):
         return None
 
 
-class FoxESSResponseTime(CoordinatorEntity, SensorEntity):
+class FoxESSResponseTime(FoxESSBaseEntity, SensorEntity):
     _attr_native_unit_of_measurement = "mS"
 
     def __init__(self, coordinator, name, deviceID):
@@ -2265,3 +2133,64 @@ class FoxESSResponseTime(CoordinatorEntity, SensorEntity):
         else:
             return self.coordinator.data["raw"]["ResponseTime"]
         return None
+
+
+class FoxESSApiCallCount(FoxESSBaseEntity, SensorEntity):
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_native_unit_of_measurement = "calls"
+    _attr_icon = "mdi:api"
+
+    def __init__(self, coordinator, name, deviceID):
+        super().__init__(coordinator=coordinator)
+        self._attr_name = name + " - API Calls Today"
+        self._attr_unique_id = deviceID + "api-calls-today"
+
+    @property
+    def native_value(self):
+        return self.coordinator.api_calls_today
+
+    @property
+    def extra_state_attributes(self):
+        return {
+            "daily_limit": 1440,
+            "remaining_calls": max(0, 1440 - self.coordinator.api_calls_today),
+        }
+
+
+class FoxESSBatteryMode(FoxESSBaseEntity, SensorEntity):
+    def __init__(self, coordinator, name, deviceID):
+        super().__init__(coordinator=coordinator)
+        self._attr_name = name + " - Battery Mode"
+        self._attr_unique_id = deviceID + "battery-mode"
+        self._attr_icon = "mdi:battery-sync"
+
+    @property
+    def native_value(self):
+        if "workMode" in self.coordinator.data:
+            return self.coordinator.data["workMode"]
+        return None
+
+
+class FoxESSFaultCount(FoxESSBaseEntity, SensorEntity):
+    _attr_state_class: SensorStateClass = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:alert-circle-outline"
+
+    def __init__(self, coordinator, name, deviceID):
+        super().__init__(coordinator=coordinator)
+        _LOGGER.debug("Initiating Entity - Fault Count")
+        self._attr_name = name + " - Fault Count"
+        self._attr_unique_id = deviceID + "fault-count"
+
+    @property
+    def native_value(self) -> int | None:
+        if self.coordinator.data["online"] and self.coordinator.data["raw"]:
+            if "currentFaultCount" not in self.coordinator.data["raw"]:
+                _LOGGER.debug("currentFaultCount None")
+            else:
+                return self.coordinator.data["raw"]["currentFaultCount"]
+        return None
+
+
+async def async_setup_entry(hass, entry, async_add_entities):
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    async_add_entities(_build_entities(coordinator))

@@ -1,0 +1,30 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add FoxESS device",
+        "description": "Enter your FoxESS Cloud API details.",
+        "data": {
+          "apiKey": "API key",
+          "deviceSN": "Device serial number",
+          "deviceID": "Device ID",
+          "name": "Name",
+          "refreshInterval": "Refresh interval (minutes)",
+          "extendPV": "Enable extended PV strings",
+          "xtZone": "Enable cross time zone handling",
+          "Restrict": "Restrict real-time variables",
+          "Use_V1_Api": "Use v1 API",
+          "Evo": "Use EVO device mode"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to FoxESS Cloud.",
+      "invalid_auth": "Invalid API key or device serial number.",
+      "unknown": "Unexpected error occurred."
+    },
+    "abort": {
+      "already_configured": "This device is already configured."
+    }
+  }
+}
