@@ -14,7 +14,6 @@ from . import DOMAIN
 from .sensor import (
     DEFAULT_ENCODING,
     DEFAULT_TIMEOUT,
-    DEFAULT_USE_V1_API,
     DEFAULT_VERIFY_SSL,
     METHOD_POST,
     GetAuth,
@@ -26,7 +25,6 @@ _LOGGER = logging.getLogger(__name__)
 
 _ENDPOINT_OA_BATTERY_SOC_SET = "/op/v0/device/battery/soc/set"
 _ENDPOINT_OA_SETTING_SET = "/op/v0/device/setting/set"
-_ENDPOINT_OA_SETTING_SET_V1 = "/op/v1/device/setting/set"
 
 
 async def setBatterySoC(hass, devicesn, apiKey, minSoc, minSocOnGrid, coordinator=None):
@@ -185,8 +183,7 @@ async def setMaxCurrent(hass, devicesn, apiKey, key, value, coordinator=None):
     """Write MaxChargeCurrent or MaxDischargeCurrent via the settings endpoint."""
     await waitforAPI(coordinator)
 
-    v1_api = coordinator.v1_api if coordinator is not None else DEFAULT_USE_V1_API
-    path = _ENDPOINT_OA_SETTING_SET_V1 if v1_api else _ENDPOINT_OA_SETTING_SET
+    path = _ENDPOINT_OA_SETTING_SET
     headerData = GetAuth().get_signature(token=apiKey, path=path)
     payload = json.dumps({"sn": devicesn, "key": key, "value": str(value)})
 

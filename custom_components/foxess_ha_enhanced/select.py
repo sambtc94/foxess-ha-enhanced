@@ -14,7 +14,6 @@ from . import DOMAIN
 from .sensor import (
     DEFAULT_ENCODING,
     DEFAULT_TIMEOUT,
-    DEFAULT_USE_V1_API,
     DEFAULT_VERIFY_SSL,
     METHOD_POST,
     GetAuth,
@@ -25,7 +24,6 @@ from .sensor import (
 _LOGGER = logging.getLogger(__name__)
 
 _ENDPOINT_OA_SETTING_SET = "/op/v0/device/setting/set"
-_ENDPOINT_OA_SETTING_SET_V1 = "/op/v1/device/setting/set"
 
 WORK_MODES = {
     "Self-Use": "SelfUse",
@@ -91,8 +89,7 @@ class FoxESSWorkModeSelect(CoordinatorEntity, SelectEntity):
 async def setWorkMode(hass, devicesn, apiKey, mode, coordinator=None):
     await waitforAPI(coordinator)
 
-    v1_api = coordinator.v1_api if coordinator is not None else DEFAULT_USE_V1_API
-    path = _ENDPOINT_OA_SETTING_SET_V1 if v1_api else _ENDPOINT_OA_SETTING_SET
+    path = _ENDPOINT_OA_SETTING_SET
     headerData = GetAuth().get_signature(token=apiKey, path=path)
     payload = json.dumps({"sn": devicesn, "key": "WorkMode", "value": mode})
     rest = RestData(
@@ -115,12 +112,6 @@ async def setWorkMode(hass, devicesn, apiKey, mode, coordinator=None):
         if rest.last_exception is not None:
             _LOGGER.error("FoxESS work mode update request failed: %s", rest.last_exception)
             raise HomeAssistantError("FoxESS work mode update request failed") from rest.last_exception
-        if v1_api:
-            _LOGGER.debug("FoxESS work mode update returned no body on v1 API; assuming success")
-            if coordinator is not None:
-                response_time = round(time.time() * 1000) - timestamp
-                coordinator.data.setdefault("raw", {})["ResponseTime"] = max(response_time, 0)
-            return
         raise HomeAssistantError("FoxESS work mode update returned no data")
 
     response = json.loads(rest.data)

@@ -50,13 +50,10 @@ _LOGGER = logging.getLogger(__name__)
 _ENDPOINT_OA_DOMAIN = "https://www.foxesscloud.com"
 _ENDPOINT_OA_BATTERY_SETTINGS = "/op/v0/device/battery/soc/get?sn="
 _ENDPOINT_OA_REPORT = "/op/v0/device/report/query"
-_ENDPOINT_OA_DEVICE_DETAIL = "/op/v0/device/detail"
 _ENDPOINT_OA_DEVICE_DETAIL_V1 = "/op/v1/device/detail"
-_ENDPOINT_OA_DEVICE_VARIABLES = "/op/v0/device/real/query"
 _ENDPOINT_OA_DEVICE_VARIABLES_V1 = "/op/v1/device/real/query"
 _ENDPOINT_OA_DAILY_GENERATION = "/op/v0/device/generation?sn="
 _ENDPOINT_OA_SETTING_GET = "/op/v0/device/setting/get"
-_ENDPOINT_OA_SETTING_GET_V1 = "/op/v1/device/setting/get"
 
 METHOD_POST = "POST"
 METHOD_GET = "GET"
@@ -83,7 +80,6 @@ CONF_SYSTEM_ID = "system_id"
 CONF_EXTPV = "extendPV"
 CONF_XTZONE = "xtZone"
 CONF_GET_VARIABLES = "Restrict"
-CONF_V1_API = "Use_V1_Api"
 CONF_EVO = "Evo"
 CONF_REFRESH_INTERVAL = "refreshInterval"
 RETRY_NEXT_SLOT = -1
@@ -91,7 +87,6 @@ DNS_ERROR = 101
 
 DEFAULT_NAME = "FoxESS"
 DEFAULT_VERIFY_SSL = False  # True
-DEFAULT_USE_V1_API = True
 
 SCAN_MINUTES = 5  # default interval in minutes between API requests
 SCAN_INTERVAL = timedelta(minutes=SCAN_MINUTES)
@@ -111,7 +106,6 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
         vol.Optional(CONF_EXTPV): cv.boolean,
         vol.Optional(CONF_XTZONE): cv.boolean,
         vol.Optional(CONF_GET_VARIABLES): cv.boolean,
-        vol.Optional(CONF_V1_API): cv.boolean,
         vol.Optional(CONF_EVO): cv.boolean,
         vol.Optional(CONF_REFRESH_INTERVAL, default=SCAN_MINUTES): vol.All(
             vol.Coerce(int), vol.Range(min=1, max=30)
@@ -123,7 +117,6 @@ token = None
 last_api = 0
 RestrictGetVar = False
 xtzone = False
-V1_Api = DEFAULT_USE_V1_API
 Evo = False
 
 def _initial_all_data():
@@ -154,7 +147,6 @@ class FoxESSCoordinator(DataUpdateCoordinator):
         ext_pv=False,
         xt_zone=False,
         restrict_get_var=False,
-        v1_api=DEFAULT_USE_V1_API,
         evo=False,
     ):
         self.device_id = device_id
@@ -164,7 +156,6 @@ class FoxESSCoordinator(DataUpdateCoordinator):
         self.ext_pv = ext_pv
         self.xt_zone = xt_zone
         self.restrict_get_var = restrict_get_var
-        self.v1_api = v1_api
         self.evo = evo
         self._refresh_interval = refresh_interval
         self._timeslice = RETRY_NEXT_SLOT
@@ -347,7 +338,6 @@ async def create_foxess_coordinator(hass, config):
     ExtPV = config.get(CONF_EXTPV, False) is True
     xtZone = config.get(CONF_XTZONE, False) is True
     Restrict = config.get(CONF_GET_VARIABLES, False) is True
-    V1 = config.get(CONF_V1_API) is not False
     evo = config.get(CONF_EVO, False) is True
     refresh_interval = int(config.get(CONF_REFRESH_INTERVAL, SCAN_MINUTES))
 
@@ -357,12 +347,7 @@ async def create_foxess_coordinator(hass, config):
     _LOGGER.debug("Cross Time Zone: %s", xtZone)
     _LOGGER.debug("Restrict Variables: %s", Restrict)
     _LOGGER.debug("Extended PV: %s", ExtPV)
-    _LOGGER.debug("v1 Api Calls: %s", V1)
     _LOGGER.debug("EVO: %s", evo)
-    if V1:
-        _LOGGER.debug("v1 Api Calls Enabled")
-    else:
-        _LOGGER.warning("v1 Api Calls Disabled, using v0")
     if ExtPV:
         _LOGGER.warning("Extended PV 1-18 strings enabled")
     else:
@@ -382,7 +367,6 @@ async def create_foxess_coordinator(hass, config):
         ext_pv=ExtPV,
         xt_zone=xtZone,
         restrict_get_var=Restrict,
-        v1_api=V1,
         evo=evo,
     )
     await coordinator.async_restore_api_call_state()
@@ -598,12 +582,8 @@ async def waitforAPI(coordinator=None):
 async def getOADeviceDetail(hass, allData, devicesn, apiKey, coordinator=None):
     await waitforAPI(coordinator)
 
-    v1_api = coordinator.v1_api if coordinator is not None else V1_Api
-    if v1_api:
-        path = _ENDPOINT_OA_DEVICE_DETAIL_V1
-        _LOGGER.debug("Device Detail using V1 API")
-    else:
-        path = _ENDPOINT_OA_DEVICE_DETAIL
+    path = _ENDPOINT_OA_DEVICE_DETAIL_V1
+    _LOGGER.debug("Device Detail using V1 API")
 
     headerData = GetAuth().get_signature(token=apiKey, path=path)
 
@@ -863,8 +843,7 @@ async def getReport(hass, allData, apiKey, devicesn, coordinator=None):
 async def getWorkMode(hass, allData, devicesn, apiKey, coordinator=None):
     await waitforAPI(coordinator)
 
-    v1_api = coordinator.v1_api if coordinator is not None else DEFAULT_USE_V1_API
-    path = _ENDPOINT_OA_SETTING_GET_V1 if v1_api else _ENDPOINT_OA_SETTING_GET
+    path = _ENDPOINT_OA_SETTING_GET
     headerData = GetAuth().get_signature(token=apiKey, path=path)
     workModeData = json.dumps({"sn": devicesn, "key": "WorkMode"})
 
@@ -989,23 +968,15 @@ async def getRaw(hass, allData, apiKey, devicesn, coordinator=None):
     # "deviceSN" used for OpenAPI and it only fetches the real time data
 
     # build the devicesn string
-    v1_api = coordinator.v1_api if coordinator is not None else V1_Api
-    if v1_api:
-        dsn = '{"sns":["' + devicesn + '"] }' 
-    else:
-        dsn = '{"sn":"' + devicesn + '" }' 
+    dsn = '{"sns":["' + devicesn + '"] }'
 
     restrict_get_var = coordinator.restrict_get_var if coordinator is not None else RestrictGetVar
-    v1_api = coordinator.v1_api if coordinator is not None else V1_Api
     xt_zone = coordinator.xt_zone if coordinator is not None else xtzone
 
     if restrict_get_var:
         _LOGGER.debug("Getting Device Variable in restricted mode")
         # build the devicesn string
-        if v1_api:
-            dsn = '{"sns":["' + devicesn + '"] ' 
-        else:
-            dsn = '{"sn":"' + devicesn + '"' 
+        dsn = '{"sns":["' + devicesn + '"] '
 
         rawData = (
             dsn + ',"variables":["ambientTemperation", "batChargePower", "batCurrent", "batCurrent_1", "batCurrent_2", "batDischargePower", "batTemperature", "batTemperature_1", "batTemperature_2", "batVolt", "batVolt_1", "batVolt_2", "boostTemperation", "chargeTemperature", "dspTemperature", "epsCurrentR", "epsCurrentS", "epsCurrentT", "epsPower", "epsPowerR", "epsPowerS", "epsPowerT", "epsVoltR", "epsVoltS", "epsVoltT", "feedinPower", "generationPower", "gridConsumptionPower", "input", "invBatCurrent", "invBatPower", "invBatVolt", "invTemperation", "loadsPower", "loadsPowerR", "loadsPowerS", "loadsPowerT", "meterPower", "meterPower2", "meterPowerR", "meterPowerS", "meterPowerT", "PowerFactor", "pv1Current", "pv1Power", "pv1Volt", "pv2Current", "pv2Power", "pv2Volt", "pv3Current", "pv3Power", "pv3Volt", "pv4Current", "pv4Power", "pv4Volt", "pvPower", "RCurrent", "ReactivePower", "RFreq", "RPower", "RVolt", "SCurrent", "SFreq", "SoC", "SPower", "SVolt", "TCurrent", "TFreq", "TPower", "TVolt", "SoC_1", "Soc_2", "ResidualEnergy", "energyThroughput", "runningState", "currentFaultCount"] }'
@@ -1017,11 +988,8 @@ async def getRaw(hass, allData, apiKey, devicesn, coordinator=None):
 
     timestamp = round(time.time() * 1000)
 
-    if v1_api:
-        path = _ENDPOINT_OA_DEVICE_VARIABLES_V1
-        _LOGGER.debug("Using V1 API")
-    else:
-        path = _ENDPOINT_OA_DEVICE_VARIABLES
+    path = _ENDPOINT_OA_DEVICE_VARIABLES_V1
+    _LOGGER.debug("Using V1 API")
 
     headerData = GetAuth().get_signature(token=apiKey, path=path)
 

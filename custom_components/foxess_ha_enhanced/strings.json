@@ -13,7 +13,6 @@
           "extendPV": "Enable extended PV strings",
           "xtZone": "Enable cross time zone handling",
           "Restrict": "Restrict real-time variables",
-          "Use_V1_Api": "Use v1 API",
           "Evo": "Use EVO device mode"
         }
       }

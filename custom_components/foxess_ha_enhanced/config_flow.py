@@ -23,17 +23,14 @@ CONF_EXTPV = "extendPV"
 CONF_NAME = "name"
 CONF_REFRESH_INTERVAL = "refreshInterval"
 CONF_RESTRICT = "Restrict"
-CONF_USE_V1_API = "Use_V1_Api"
 CONF_XTZONE = "xtZone"
 DEFAULT_NAME = "FoxESS"
 DEFAULT_REFRESH_INTERVAL = 5
-DEFAULT_USE_V1_API = True
 DEFAULT_VERIFY_SSL = False
 DEFAULT_TIMEOUT = 75
 DEFAULT_ENCODING = "UTF-8"
 METHOD_GET = "GET"
 _ENDPOINT_OA_DOMAIN = "https://www.foxesscloud.com"
-_ENDPOINT_OA_DEVICE_DETAIL = "/op/v0/device/detail"
 _ENDPOINT_OA_DEVICE_DETAIL_V1 = "/op/v1/device/detail"
 
 
@@ -66,7 +63,7 @@ class GetAuth:
 
 async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
     """Validate the user input allows us to connect."""
-    path = _ENDPOINT_OA_DEVICE_DETAIL_V1 if data.get(CONF_USE_V1_API, DEFAULT_USE_V1_API) else _ENDPOINT_OA_DEVICE_DETAIL
+    path = _ENDPOINT_OA_DEVICE_DETAIL_V1
     headers = GetAuth().get_signature(token=data[CONF_APIKEY], path=path)
     rest = RestData(
         hass,
@@ -132,10 +129,6 @@ class FoxessConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Optional(CONF_EXTPV, default=user_input.get(CONF_EXTPV, False)): bool,
                 vol.Optional(CONF_XTZONE, default=user_input.get(CONF_XTZONE, False)): bool,
                 vol.Optional(CONF_RESTRICT, default=user_input.get(CONF_RESTRICT, False)): bool,
-                vol.Optional(
-                    CONF_USE_V1_API,
-                    default=user_input.get(CONF_USE_V1_API, DEFAULT_USE_V1_API),
-                ): bool,
                 vol.Optional(CONF_EVO, default=user_input.get(CONF_EVO, False)): bool,
             }
         )
