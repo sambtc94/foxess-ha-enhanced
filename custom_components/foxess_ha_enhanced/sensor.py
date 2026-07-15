@@ -39,6 +39,7 @@ from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
     DataUpdateCoordinator,
 )
+from homeassistant.helpers.storage import Store
 from homeassistant.util.ssl import SSLCipherList
 from homeassistant.helpers.icon import icon_for_battery_level
 import homeassistant.helpers.config_validation as cv
@@ -97,6 +98,7 @@ SCAN_INTERVAL = timedelta(minutes=SCAN_MINUTES)
 # Cycle length in ticks before resetting to tslice=0 (battery settings + daily gen refresh).
 # At the default 5-min interval: 12 ticks × 5 min = 60-minute cycle.
 TICK_CYCLE_LENGTH = 11
+API_CALL_STORE_VERSION = 1
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     {
@@ -171,6 +173,11 @@ class FoxESSCoordinator(DataUpdateCoordinator):
         self._api_calls_today = 0
         self._api_calls_date = date.today()
         self._all_data = _initial_all_data()
+        self._api_call_store = Store(
+            hass,
+            API_CALL_STORE_VERSION,
+            f"{DOMAIN}_api_calls_{self.device_sn}",
+        )
         super().__init__(
             hass,
             _LOGGER,
@@ -188,6 +195,40 @@ class FoxESSCoordinator(DataUpdateCoordinator):
             self._api_calls_date = today
             self._api_calls_today = 0
         self._api_calls_today += 1
+        self.hass.async_create_task(self._async_save_api_call_state())
+
+    async def _async_save_api_call_state(self):
+        try:
+            await self._api_call_store.async_save(
+                {
+                    "date": self._api_calls_date.isoformat(),
+                    "count": self._api_calls_today,
+                }
+            )
+        except HomeAssistantError:
+            _LOGGER.debug("Failed to persist API call count for %s", self.device_sn)
+
+    async def async_restore_api_call_state(self):
+        saved_state = await self._api_call_store.async_load()
+        if not saved_state:
+            return
+
+        saved_date = saved_state.get("date")
+        saved_count = saved_state.get("count")
+        if not isinstance(saved_date, str) or not isinstance(saved_count, int):
+            return
+
+        try:
+            stored_date = date.fromisoformat(saved_date)
+        except ValueError:
+            return
+
+        if stored_date == date.today():
+            self._api_calls_date = stored_date
+            self._api_calls_today = max(0, saved_count)
+        else:
+            self._api_calls_date = date.today()
+            self._api_calls_today = 0
 
     async def _async_update_data(self):
         allData = self._all_data
@@ -344,6 +385,7 @@ async def create_foxess_coordinator(hass, config):
         v1_api=V1,
         evo=evo,
     )
+    await coordinator.async_restore_api_call_state()
     await coordinator.async_refresh()
     return coordinator
 
