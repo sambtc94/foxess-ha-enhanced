@@ -3,7 +3,7 @@ from __future__ import annotations
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
-DOMAIN = "foxess"
+DOMAIN = "foxess_ha_enhanced"
 PLATFORMS = ["sensor", "select", "number"]
 
 

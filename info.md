@@ -20,9 +20,9 @@ Use hacs.io to manage the installation and update process. Right now this integr
 
 ## ⌨️ Manual installation 
 
-Create the folder called `foxess` in `/homeassistant/custom_components`
+Create the folder called `foxess_ha_enhanced` in `/homeassistant/custom_components`
 
-Copy the content of this integrations `custom_components/foxess` folder into your HA `/homeassistant/custom_components/foxess` folder
+Copy the content of this integrations `custom_components/foxess_ha_enhanced` folder into your HA `/homeassistant/custom_components/foxess_ha_enhanced` folder
 
 
 
@@ -32,7 +32,7 @@ Edit your home-assistant `/configuration.yaml`  and add:
 
 ```yaml
 sensor:
-  - platform: foxess
+  - platform: foxess_ha_enhanced
     deviceID: enter_your_inverter_id
     deviceSN: enter_your_inverter_serial_number
     apiKey: enter_your_personal_api_key
@@ -51,12 +51,12 @@ sensor:
 - Multi-inverter support - if you have more than one FoxESS device in your installation, you can leverage the optional `name` field in your config,
    ```
    sensor:
-     - platform: foxess
+     - platform: foxess_ha_enhanced
        name: Fox1
        deviceID: enter_your_inverter_id_1
        deviceSN: enter_your_inverter_serial_number_1
        apiKey: enter_your_personal_api_key_1
-     - platform: foxess
+     - platform: foxess_ha_enhanced
        name: Fox2
        deviceID: enter_your_inverter_id_2
        deviceSN: enter_your_inverter_serial_number_2
@@ -147,7 +147,7 @@ Increase log level in your `/configuration.yaml` by adding:
 logger:
   default: warning
   logs:
-    custom_components.foxess: debug
+    custom_components.foxess_ha_enhanced: debug
 ```
 
 ## FoxESS Open API Access and Limits
