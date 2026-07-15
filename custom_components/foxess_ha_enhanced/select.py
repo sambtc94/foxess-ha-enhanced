@@ -123,6 +123,12 @@ async def setWorkMode(hass, devicesn, apiKey, mode, coordinator=None):
     timestamp = round(time.time() * 1000)
     await rest.async_update()
     if not rest.data:
+        if v1_api:
+            _LOGGER.debug("FoxESS work mode update returned no body on v1 API; assuming success")
+            if coordinator is not None:
+                response_time = round(time.time() * 1000) - timestamp
+                coordinator.data.setdefault("raw", {})["ResponseTime"] = max(response_time, 0)
+            return
         raise HomeAssistantError("FoxESS work mode update returned no data")
 
     response = json.loads(rest.data)
