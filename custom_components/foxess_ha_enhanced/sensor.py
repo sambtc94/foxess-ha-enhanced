@@ -140,6 +140,7 @@ def _initial_all_data():
         "schedulerEnabled": None,
         "schedulerGroups": None,
         "schedulerApiVersion": None,
+        "schedulerResponse": None,
         "peakShavingImportLimit": None,
         "peakShavingSoc": None,
     }
@@ -961,56 +962,48 @@ async def getSchedulerFlag(hass, allData, devicesn, apiKey, coordinator=None):
 
 
 async def getSchedulerGroups(hass, allData, devicesn, apiKey, coordinator=None):
-    discovered_version = allData.get("schedulerApiVersion")
-    versions = (
-        [discovered_version]
-        if discovered_version in _SCHEDULER_GROUP_GET_ENDPOINTS
-        else list(_SCHEDULER_GROUP_GET_ENDPOINTS)
+    await waitforAPI(coordinator)
+
+    version = 3
+    path = _SCHEDULER_GROUP_GET_ENDPOINTS[version]
+    headerData = GetAuth().get_signature(token=apiKey, path=path)
+    payload = json.dumps({"deviceSN": devicesn})
+    rest = RestData(
+        hass,
+        METHOD_POST,
+        _ENDPOINT_OA_DOMAIN + path,
+        DEFAULT_ENCODING,
+        None,
+        headerData,
+        None,
+        payload,
+        DEFAULT_VERIFY_SSL,
+        SSLCipherList.PYTHON_DEFAULT,
+        DEFAULT_TIMEOUT,
     )
 
-    for version in versions:
-        await waitforAPI(coordinator)
+    await rest.async_update()
+    if not rest.data:
+        _LOGGER.debug("Unable to get OA Scheduler Groups using V%s", version)
+        return True
 
-        path = _SCHEDULER_GROUP_GET_ENDPOINTS[version]
-        headerData = GetAuth().get_signature(token=apiKey, path=path)
-        payload = json.dumps({"deviceSN": devicesn})
-        rest = RestData(
-            hass,
-            METHOD_POST,
-            _ENDPOINT_OA_DOMAIN + path,
-            DEFAULT_ENCODING,
-            None,
-            headerData,
-            None,
-            payload,
-            DEFAULT_VERIFY_SSL,
-            SSLCipherList.PYTHON_DEFAULT,
-            DEFAULT_TIMEOUT,
-        )
+    _LOGGER.debug(
+        "OA Scheduler Groups V%s response from %s: %s",
+        version,
+        path,
+        rest.data,
+    )
+    response = json.loads(rest.data)
+    if response.get("errno") != 0:
+        _LOGGER.debug("OA Scheduler Groups V%s bad response: %s", version, response)
+        return True
 
-        await rest.async_update()
-        if not rest.data:
-            _LOGGER.debug("Unable to get OA Scheduler Groups using V%s", version)
-            continue
-
-        _LOGGER.debug(
-            "OA Scheduler Groups V%s response from %s: %s",
-            version,
-            path,
-            rest.data,
-        )
-        response = json.loads(rest.data)
-        if response.get("errno") != 0:
-            _LOGGER.debug("OA Scheduler Groups V%s bad response: %s", version, response)
-            continue
-
-        result = response.get("result") or {}
-        allData["schedulerApiVersion"] = version
-        allData["schedulerGroups"] = result
-        _LOGGER.debug("OA Scheduler Groups V%s: %s", version, result)
-        return False
-
-    return True
+    result = response.get("result") or {}
+    allData["schedulerApiVersion"] = version
+    allData["schedulerResponse"] = response
+    allData["schedulerGroups"] = result
+    _LOGGER.debug("OA Scheduler Groups V%s: %s", version, result)
+    return False
 
 
 async def getPeakShaving(hass, allData, devicesn, apiKey, coordinator=None):
@@ -2266,9 +2259,11 @@ class FoxESSSchedulerSchedule(FoxESSBaseEntity, SensorEntity):
         return {
             "scheduler_enabled": self.coordinator.data.get("schedulerEnabled"),
             "scheduler_api_version": self.coordinator.data.get("schedulerApiVersion"),
+            "scheduler_is_default": scheduler.get("isDefault"),
             "groups": scheduler.get("groups", []),
             "properties": scheduler.get("properties"),
             "max_group_count": _scheduler_max_group_count(scheduler),
+            "scheduler_response": self.coordinator.data.get("schedulerResponse"),
         }
 
 
