@@ -133,6 +133,7 @@ minSoC on Grid | %
 Peak Shaving Import Limit | W
 Peak Shaving Battery SOC | %
 Mode Scheduler | on/off
+Mode Scheduler Schedule | number of configured groups and schedule attributes
 Power Factor | %
 API Response Time | mS
 

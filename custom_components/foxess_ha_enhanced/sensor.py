@@ -456,6 +456,7 @@ def _build_entities(coordinator):
         FoxESSPower(coordinator, name, deviceID, "Inverter Bat Power2", "inv-Bat-Power2", "invBatPower_2"),
         FoxESSBatMinSoC(coordinator, name, deviceID),
         FoxESSBatMinSoConGrid(coordinator, name, deviceID),
+        FoxESSSchedulerSchedule(coordinator, name, deviceID),
         FoxESSMaxBatChargeCurrent(coordinator, name, deviceID),
         FoxESSMaxBatDischargeCurrent(coordinator, name, deviceID),
         FoxESSSolarPower(coordinator, name, deviceID),
@@ -2211,6 +2212,43 @@ class FoxESSBatMinSoConGrid(FoxESSBaseEntity, SensorEntity):
     @property
     def icon(self):
         return icon_for_battery_level(battery_level=self.native_value, charging=None)
+
+
+class FoxESSSchedulerSchedule(FoxESSBaseEntity, SensorEntity):
+    _attr_icon = "mdi:calendar-clock"
+
+    def __init__(self, coordinator, name, deviceID):
+        super().__init__(coordinator=coordinator)
+        self._attr_name = name + " - Mode Scheduler Schedule"
+        self._attr_unique_id = deviceID + "mode-scheduler-schedule"
+
+    @property
+    def available(self) -> bool:
+        return super().available and self.coordinator.data.get("schedulerGroups") is not None
+
+    @property
+    def native_value(self) -> int | None:
+        scheduler = self.coordinator.data.get("schedulerGroups")
+        if not isinstance(scheduler, dict):
+            return None
+        groups = scheduler.get("groups")
+        return len(groups) if isinstance(groups, list) else 0
+
+    @property
+    def native_unit_of_measurement(self) -> str:
+        return "groups"
+
+    @property
+    def extra_state_attributes(self):
+        scheduler = self.coordinator.data.get("schedulerGroups")
+        if not isinstance(scheduler, dict):
+            return None
+        return {
+            "scheduler_enabled": self.coordinator.data.get("schedulerEnabled"),
+            "scheduler_api_version": self.coordinator.data.get("schedulerApiVersion"),
+            "groups": scheduler.get("groups", []),
+            "properties": scheduler.get("properties"),
+        }
 
 
 class FoxESSTemp(FoxESSBaseEntity, SensorEntity):
