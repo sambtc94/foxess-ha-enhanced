@@ -73,6 +73,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         )
         coordinator.data["schedulerGroups"] = result
         coordinator.async_set_updated_data(coordinator.data)
+        await coordinator.async_refresh()
 
     hass.services.async_register(
         DOMAIN,
