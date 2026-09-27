@@ -1,0 +1,34 @@
+set_scheduler:
+  name: Set scheduler groups
+  description: Configure FoxESS scheduler time groups for an inverter.
+  fields:
+    device_sn:
+      name: Device serial number
+      description: FoxESS inverter serial number.
+      required: true
+      example: H123456789
+      selector:
+        text:
+    groups:
+      name: Scheduler groups
+      description: List of scheduler groups using FoxESS API field names.
+      required: true
+      example:
+        - enable: 1
+          startHour: 0
+          startMinute: 0
+          endHour: 5
+          endMinute: 59
+          workMode: SelfUse
+          minSocOnGrid: 10
+          fdSoc: 90
+          fdPwr: 3000
+          maxSoc: 100
+      selector:
+        object:
+    is_default:
+      name: Restore defaults for omitted fields
+      description: Restore unspecified scheduler fields to device defaults when true.
+      default: false
+      selector:
+        boolean:

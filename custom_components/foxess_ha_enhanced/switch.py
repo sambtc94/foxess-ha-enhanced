@@ -22,6 +22,11 @@ from .sensor import (
 
 _LOGGER = logging.getLogger(__name__)
 _ENDPOINT_OA_SCHEDULER_FLAG_SET_V1 = "/op/v1/device/scheduler/set/flag"
+_SCHEDULER_GROUP_SET_ENDPOINTS = {
+    1: "/op/v1/device/scheduler/enable",
+    2: "/op/v2/device/scheduler/enable",
+    3: "/op/v3/device/scheduler/enable",
+}
 
 
 async def set_scheduler_enabled(hass, devicesn, api_key, enabled, coordinator=None):
@@ -54,6 +59,48 @@ async def set_scheduler_enabled(hass, devicesn, api_key, enabled, coordinator=No
         raise HomeAssistantError("FoxESS scheduler update failed")
 
 
+async def set_scheduler_groups(
+    hass, devicesn, api_key, groups, is_default=False, coordinator=None
+):
+    await waitforAPI(coordinator)
+
+    version = 1
+    if coordinator is not None:
+        version = coordinator.data.get("schedulerApiVersion") or version
+    path = _SCHEDULER_GROUP_SET_ENDPOINTS.get(version, _SCHEDULER_GROUP_SET_ENDPOINTS[1])
+    headers = GetAuth().get_signature(token=api_key, path=path)
+    payload = json.dumps(
+        {"deviceSN": devicesn, "isDefault": is_default, "groups": groups}
+    )
+    rest = RestData(
+        hass,
+        METHOD_POST,
+        _ENDPOINT_OA_DOMAIN + path,
+        DEFAULT_ENCODING,
+        None,
+        headers,
+        None,
+        payload,
+        DEFAULT_VERIFY_SSL,
+        SSLCipherList.PYTHON_DEFAULT,
+        DEFAULT_TIMEOUT,
+    )
+
+    await rest.async_update()
+    if not rest.data:
+        raise HomeAssistantError("FoxESS scheduler groups update returned no data")
+
+    response = json.loads(rest.data)
+    if response.get("errno") != 0:
+        _LOGGER.error("FoxESS scheduler groups update failed: %s", response)
+        raise HomeAssistantError("FoxESS scheduler groups update failed")
+
+    result = response.get("result") or {"groups": groups, "isDefault": is_default}
+    if coordinator is not None:
+        coordinator.data["schedulerApiVersion"] = version
+    return result
+
+
 class FoxESSSchedulerSwitch(CoordinatorEntity, SwitchEntity):
     _attr_icon = "mdi:calendar-clock"
 
@@ -72,6 +119,16 @@ class FoxESSSchedulerSwitch(CoordinatorEntity, SwitchEntity):
     @property
     def is_on(self) -> bool | None:
         return self.coordinator.data.get("schedulerEnabled")
+
+    @property
+    def extra_state_attributes(self):
+        groups = self.coordinator.data.get("schedulerGroups")
+        if not isinstance(groups, dict):
+            return None
+        return {
+            "scheduler_groups": groups.get("groups", []),
+            "scheduler_properties": groups.get("properties"),
+        }
 
     @property
     def device_info(self):

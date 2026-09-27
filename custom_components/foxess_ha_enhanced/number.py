@@ -24,6 +24,7 @@ from .sensor import (
 _LOGGER = logging.getLogger(__name__)
 
 _ENDPOINT_OA_BATTERY_SOC_SET = "/op/v0/device/battery/soc/set"
+_ENDPOINT_OA_PEAK_SHAVING_SET = "/op/v0/device/peakShaving/set"
 
 
 async def setBatterySoC(hass, devicesn, apiKey, minSoc, minSocOnGrid, coordinator=None):
@@ -58,6 +59,37 @@ async def setBatterySoC(hass, devicesn, apiKey, minSoc, minSocOnGrid, coordinato
     if response.get("errno") != 0:
         _LOGGER.error("FoxESS battery SoC update failed: %s", response)
         raise HomeAssistantError("FoxESS battery SoC update failed")
+
+
+async def setPeakShaving(hass, devicesn, apiKey, import_limit, soc, coordinator=None):
+    await waitforAPI(coordinator)
+
+    path = _ENDPOINT_OA_PEAK_SHAVING_SET
+    headers = GetAuth().get_signature(token=apiKey, path=path)
+    payload = json.dumps(
+        {"sn": devicesn, "importLimit": import_limit, "soc": soc}
+    )
+    rest = RestData(
+        hass,
+        METHOD_POST,
+        _ENDPOINT_OA_DOMAIN + path,
+        DEFAULT_ENCODING,
+        None,
+        headers,
+        None,
+        payload,
+        DEFAULT_VERIFY_SSL,
+        SSLCipherList.PYTHON_DEFAULT,
+        DEFAULT_TIMEOUT,
+    )
+    await rest.async_update()
+    if not rest.data:
+        raise HomeAssistantError("FoxESS Peak Shaving update returned no data")
+
+    response = json.loads(rest.data)
+    if response.get("errno") != 0:
+        _LOGGER.error("FoxESS Peak Shaving update failed: %s", response)
+        raise HomeAssistantError("FoxESS Peak Shaving update failed")
 
 
 class FoxESSBatMinSoCNumber(CoordinatorEntity, NumberEntity):
@@ -178,6 +210,96 @@ class FoxESSBatMinSoCOnGridNumber(CoordinatorEntity, NumberEntity):
         self.coordinator.async_set_updated_data(self.coordinator.data)
 
 
+class FoxESSPeakShavingImportLimitNumber(CoordinatorEntity, NumberEntity):
+    _attr_native_min_value = 0
+    _attr_native_max_value = 100000
+    _attr_native_step = 1
+    _attr_native_unit_of_measurement = "W"
+    _attr_mode = NumberMode.SLIDER
+    _attr_icon = "mdi:transmission-tower-import"
+
+    def __init__(self, coordinator, name, deviceID, deviceSN, apiKey):
+        super().__init__(coordinator=coordinator)
+        self._attr_name = name + " - Peak Shaving Import Limit"
+        self._attr_unique_id = deviceID + "peak-shaving-import-limit"
+        self._deviceSN = deviceSN
+        self._apiKey = apiKey
+        self._deviceID = deviceID
+
+    @property
+    def available(self) -> bool:
+        return super().available and self.coordinator.data.get("peakShavingImportLimit") is not None
+
+    @property
+    def device_info(self):
+        return _device_info(self.coordinator, self._deviceID)
+
+    @property
+    def native_value(self) -> float | None:
+        value = self.coordinator.data.get("peakShavingImportLimit")
+        return float(value) if value is not None else None
+
+    async def async_set_native_value(self, value: float) -> None:
+        soc = self.coordinator.data.get("peakShavingSoc")
+        if soc is None:
+            raise HomeAssistantError("FoxESS Peak Shaving SOC is unavailable")
+        await setPeakShaving(
+            self.hass,
+            self._deviceSN,
+            self._apiKey,
+            int(value),
+            int(float(soc)),
+            coordinator=self.coordinator,
+        )
+        self.coordinator.data["peakShavingImportLimit"] = int(value)
+        self.coordinator.async_set_updated_data(self.coordinator.data)
+
+
+class FoxESSPeakShavingSocNumber(CoordinatorEntity, NumberEntity):
+    _attr_native_min_value = 0
+    _attr_native_max_value = 100
+    _attr_native_step = 1
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_mode = NumberMode.SLIDER
+    _attr_icon = "mdi:battery-lock"
+
+    def __init__(self, coordinator, name, deviceID, deviceSN, apiKey):
+        super().__init__(coordinator=coordinator)
+        self._attr_name = name + " - Peak Shaving Battery SOC"
+        self._attr_unique_id = deviceID + "peak-shaving-soc"
+        self._deviceSN = deviceSN
+        self._apiKey = apiKey
+        self._deviceID = deviceID
+
+    @property
+    def available(self) -> bool:
+        return super().available and self.coordinator.data.get("peakShavingSoc") is not None
+
+    @property
+    def device_info(self):
+        return _device_info(self.coordinator, self._deviceID)
+
+    @property
+    def native_value(self) -> float | None:
+        value = self.coordinator.data.get("peakShavingSoc")
+        return float(value) if value is not None else None
+
+    async def async_set_native_value(self, value: float) -> None:
+        import_limit = self.coordinator.data.get("peakShavingImportLimit")
+        if import_limit is None:
+            raise HomeAssistantError("FoxESS Peak Shaving import limit is unavailable")
+        await setPeakShaving(
+            self.hass,
+            self._deviceSN,
+            self._apiKey,
+            int(float(import_limit)),
+            int(value),
+            coordinator=self.coordinator,
+        )
+        self.coordinator.data["peakShavingSoc"] = int(value)
+        self.coordinator.async_set_updated_data(self.coordinator.data)
+
+
 def _device_info(coordinator, deviceID):
     from homeassistant.helpers.entity import DeviceInfo
 
@@ -207,6 +329,8 @@ async def async_setup_entry(hass, entry, async_add_entities):
     entities = [
         FoxESSBatMinSoCNumber(coordinator, name, device_id, device_sn, api_key),
         FoxESSBatMinSoCOnGridNumber(coordinator, name, device_id, device_sn, api_key),
+        FoxESSPeakShavingImportLimitNumber(coordinator, name, device_id, device_sn, api_key),
+        FoxESSPeakShavingSocNumber(coordinator, name, device_id, device_sn, api_key),
     ]
     async_add_entities(entities)
 

@@ -53,6 +53,13 @@ _ENDPOINT_OA_REPORT = "/op/v0/device/report/query"
 _ENDPOINT_OA_DEVICE_DETAIL_V1 = "/op/v1/device/detail"
 _ENDPOINT_OA_DEVICE_VARIABLES_V1 = "/op/v1/device/real/query"
 _ENDPOINT_OA_SCHEDULER_FLAG_GET_V1 = "/op/v1/device/scheduler/get/flag"
+_ENDPOINT_OA_SCHEDULER_GET_V1 = "/op/v1/device/scheduler/get"
+_SCHEDULER_GROUP_GET_ENDPOINTS = {
+    1: "/op/v1/device/scheduler/get",
+    2: "/op/v2/device/scheduler/get",
+    3: "/op/v3/device/scheduler/get",
+}
+_ENDPOINT_OA_PEAK_SHAVING_GET = "/op/v0/device/peakShaving/get"
 _ENDPOINT_OA_DAILY_GENERATION = "/op/v0/device/generation?sn="
 _ENDPOINT_OA_SETTING_GET = "/op/v0/device/setting/get"
 
@@ -131,6 +138,10 @@ def _initial_all_data():
         "workMode": None,
         "schedulerSupported": None,
         "schedulerEnabled": None,
+        "schedulerGroups": None,
+        "schedulerApiVersion": None,
+        "peakShavingImportLimit": None,
+        "peakShavingSoc": None,
     }
     all_data["addressbook"]["hasBattery"] = False
     all_data["addressbook"]["status"] = "3"
@@ -250,6 +261,18 @@ class FoxESSCoordinator(DataUpdateCoordinator):
             )
             if scheduler_error:
                 _LOGGER.debug("getSchedulerFlag returned an error")
+            if allData["schedulerSupported"] is not False:
+                scheduler_groups_error = await getSchedulerGroups(
+                    self.hass, allData, self.device_sn, self.api_key, coordinator=self
+                )
+                if scheduler_groups_error:
+                    _LOGGER.debug("getSchedulerGroups returned an error")
+            if allData["addressbook"].get("hasBattery"):
+                peak_shaving_error = await getPeakShaving(
+                    self.hass, allData, self.device_sn, self.api_key, coordinator=self
+                )
+                if peak_shaving_error:
+                    _LOGGER.debug("getPeakShaving returned an error")
             await asyncio.sleep(1)
 
         if not geterror:
@@ -919,6 +942,92 @@ async def getSchedulerFlag(hass, allData, devicesn, apiKey, coordinator=None):
     allData["schedulerSupported"] = result.get("support")
     allData["schedulerEnabled"] = result.get("enable")
     _LOGGER.debug("OA Scheduler Flag: %s", result)
+    return False
+
+
+async def getSchedulerGroups(hass, allData, devicesn, apiKey, coordinator=None):
+    discovered_version = allData.get("schedulerApiVersion")
+    versions = (
+        [discovered_version]
+        if discovered_version in _SCHEDULER_GROUP_GET_ENDPOINTS
+        else list(_SCHEDULER_GROUP_GET_ENDPOINTS)
+    )
+
+    for version in versions:
+        await waitforAPI(coordinator)
+
+        path = _SCHEDULER_GROUP_GET_ENDPOINTS[version]
+        headerData = GetAuth().get_signature(token=apiKey, path=path)
+        payload = json.dumps({"deviceSN": devicesn})
+        rest = RestData(
+            hass,
+            METHOD_POST,
+            _ENDPOINT_OA_DOMAIN + path,
+            DEFAULT_ENCODING,
+            None,
+            headerData,
+            None,
+            payload,
+            DEFAULT_VERIFY_SSL,
+            SSLCipherList.PYTHON_DEFAULT,
+            DEFAULT_TIMEOUT,
+        )
+
+        await rest.async_update()
+        if not rest.data:
+            _LOGGER.debug("Unable to get OA Scheduler Groups using V%s", version)
+            continue
+
+        response = json.loads(rest.data)
+        if response.get("errno") != 0:
+            _LOGGER.debug("OA Scheduler Groups V%s bad response: %s", version, response)
+            continue
+
+        result = response.get("result") or {}
+        allData["schedulerApiVersion"] = version
+        allData["schedulerGroups"] = result
+        _LOGGER.debug("OA Scheduler Groups V%s: %s", version, result)
+        return False
+
+    return True
+
+
+async def getPeakShaving(hass, allData, devicesn, apiKey, coordinator=None):
+    await waitforAPI(coordinator)
+
+    path = _ENDPOINT_OA_PEAK_SHAVING_GET
+    headerData = GetAuth().get_signature(token=apiKey, path=path)
+    payload = json.dumps({"sn": devicesn})
+    rest = RestData(
+        hass,
+        METHOD_POST,
+        _ENDPOINT_OA_DOMAIN + path,
+        DEFAULT_ENCODING,
+        None,
+        headerData,
+        None,
+        payload,
+        DEFAULT_VERIFY_SSL,
+        SSLCipherList.PYTHON_DEFAULT,
+        DEFAULT_TIMEOUT,
+    )
+
+    await rest.async_update()
+    if not rest.data:
+        _LOGGER.debug("Unable to get OA Peak Shaving settings from FoxESS Cloud")
+        return True
+
+    response = json.loads(rest.data)
+    if response.get("errno") != 0:
+        _LOGGER.debug("OA Peak Shaving bad response: %s", response)
+        return True
+
+    result = response.get("result") or {}
+    import_limit = result.get("importLimit") or {}
+    soc = result.get("soc") or {}
+    allData["peakShavingImportLimit"] = import_limit.get("value")
+    allData["peakShavingSoc"] = soc.get("value")
+    _LOGGER.debug("OA Peak Shaving settings: %s", result)
     return False
 
 

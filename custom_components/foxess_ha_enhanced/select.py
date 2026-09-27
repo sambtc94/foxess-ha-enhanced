@@ -29,6 +29,8 @@ WORK_MODES = {
     "Self-Use": "SelfUse",
     "Backup": "Backup",
     "Feed-In": "Feedin",
+    "Force Charge": "ForceCharge",
+    "Force Discharge": "ForceDischarge",
 }
 
 
@@ -38,6 +40,7 @@ class FoxESSWorkModeSelect(CoordinatorEntity, SelectEntity):
 
     def __init__(self, coordinator, name, deviceID, deviceSN, apiKey):
         super().__init__(coordinator=coordinator)
+        self._attr_options = list(WORK_MODES)
         self._attr_name = name + " - Work Mode"
         self._attr_unique_id = deviceID + "work-mode-select"
         self._deviceSN = deviceSN

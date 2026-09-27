@@ -122,6 +122,9 @@ Inv Temp | °C
 Residual Energy | kWh
 minSoC | %
 minSoC on Grid | %
+Peak Shaving Import Limit | W
+Peak Shaving Battery SOC | %
+Mode Scheduler | on/off
 Power Factor | %
 API Response Time | mS
 
@@ -166,8 +169,10 @@ The integration paces the number of API calls that are made, with the following 
 - Cumulative total reports (generation, feedin, gridConsumption, BatterychargeTotal, Batterydischargetotal, home load) - every 15 minutes
 - Daily Generation report (Daily Energy Generated - 'total yield') - every 30 minutes
 - Battery minSoC settings - every 30 minutes
+- Scheduler status and groups - every 15 minutes
+- Peak Shaving settings - every 15 minutes
 
-The integration is using approximately 24 API calls an hour (576 a day and well within the 1,440).
+The integration uses approximately 36 API calls an hour (864 a day and well within the 1,440 limit) with the default refresh interval.
 
 If you have multiple inverters in your account, you will receive 1,440 calls per inverter, so for 2 inverters you will have 2,880 api calls.
 

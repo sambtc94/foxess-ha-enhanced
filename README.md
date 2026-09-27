@@ -139,8 +139,6 @@ Bat SoC | % (single battery systems)
 Bat SoC1 | % (dual battery systems)
 Bat SoC2 | % (dual battery systems)
 Bat SoH | % (single battery systems where BMS supports it)
-Max Bat Charge Current | A
-Max Bat Discharge Current | A
 Inverter Bat Power | kW (negative=charging, positive=discharging)
 Inverter Bat Power2 | kW (dual battery systems
 Bat Temperature | °C 
@@ -151,6 +149,9 @@ Inv Temp | °C
 Residual Energy | kWh
 minSoC | %
 minSoC on Grid | %
+Peak Shaving Import Limit | W
+Peak Shaving Battery SOC | %
+Mode Scheduler | on/off
 Power Factor | %
 API Response Time | mS
 Running State | string `163: on-grid` (see **Table1**)
@@ -212,10 +213,22 @@ The integration paces the number of API calls that are made, with the following 
 - Cumulative total reports (generation, feedin, gridConsumption, BatterychargeTotal, Batterydischargetotal, home load) - every 15 minutes
 - Daily Generation report (Daily Energy Generated - 'total yield') - every 60 minutes
 - Battery minSoC settings - every 60 minutes
+- Scheduler status and groups - every 15 minutes
+- Peak Shaving settings - every 15 minutes
 
-The integration is using approximately 22 API calls an hour (528 a day and well within the 1,440).
+The integration uses approximately 34 API calls an hour (816 a day and well within the 1,440 limit) with the default refresh interval.
 
 If you have multiple inverters in your account, you will receive 1,440 calls per inverter, so for 2 inverters you will have 2,880 api calls.
+
+### Scheduler and Peak Shaving
+
+The `Mode Scheduler` switch controls the FoxESS scheduler master switch. Configured scheduler groups are exposed as attributes on that entity.
+
+Timed scheduler groups can be written with the `foxess_ha_enhanced.set_scheduler` action. The action accepts FoxESS fields such as `startHour`, `endHour`, `workMode`, `minSocOnGrid`, `fdSoc`, `fdPwr`, and `maxSoc`.
+
+Supported scheduler work modes are `SelfUse`, `Feedin`, `Backup`, `ForceCharge`, and `ForceDischarge`.
+
+Peak Shaving is separate from the scheduler. Its controls set the grid import limit and minimum battery SOC. FoxESS does not document a fixed priority between scheduler and Peak Shaving; inverter firmware decides how conflicting requests are applied.
 
 
 ## 📚 Usefull wiki articles
