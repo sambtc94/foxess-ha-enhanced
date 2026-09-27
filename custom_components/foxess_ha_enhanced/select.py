@@ -29,8 +29,7 @@ WORK_MODES = {
     "Self-Use": "SelfUse",
     "Backup": "Backup",
     "Feed-In": "Feedin",
-    "Force Charge": "ForceCharge",
-    "Force Discharge": "ForceDischarge",
+    "Peak Shaving": "PeakShaving",
 }
 
 

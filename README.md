@@ -226,7 +226,7 @@ The `Mode Scheduler` switch controls the FoxESS scheduler master switch. Configu
 
 Timed scheduler groups can be written with the `foxess_ha_enhanced.set_scheduler` action. The action accepts FoxESS fields such as `startHour`, `endHour`, `workMode`, `minSocOnGrid`, `fdSoc`, `fdPwr`, and `maxSoc`.
 
-Supported scheduler work modes are `SelfUse`, `Feedin`, `Backup`, `ForceCharge`, and `ForceDischarge`.
+The immediate Work Mode selector supports `SelfUse`, `Feedin`, `Backup`, and `PeakShaving`. `ForceCharge` and `ForceDischarge` are scheduler-only modes and are available through scheduler groups.
 
 Peak Shaving is separate from the scheduler. Its controls set the grid import limit and minimum battery SOC. FoxESS does not document a fixed priority between scheduler and Peak Shaving; inverter firmware decides how conflicting requests are applied.
 
