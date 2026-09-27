@@ -2248,6 +2248,7 @@ class FoxESSSchedulerSchedule(FoxESSBaseEntity, SensorEntity):
             "scheduler_api_version": self.coordinator.data.get("schedulerApiVersion"),
             "groups": scheduler.get("groups", []),
             "properties": scheduler.get("properties"),
+            "max_group_count": (scheduler.get("properties") or {}).get("maxGroupCount"),
         }
 
 

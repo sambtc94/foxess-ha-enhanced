@@ -128,6 +128,7 @@ class FoxESSSchedulerSwitch(CoordinatorEntity, SwitchEntity):
         return {
             "scheduler_groups": groups.get("groups", []),
             "scheduler_properties": groups.get("properties"),
+            "scheduler_max_group_count": (groups.get("properties") or {}).get("maxGroupCount"),
         }
 
     @property
