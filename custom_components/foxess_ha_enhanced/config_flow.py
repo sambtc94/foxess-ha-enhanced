@@ -48,7 +48,7 @@ class GetAuth:
         import time
 
         timestamp = round(time.time() * 1000)
-        signature = rf"{path}\r\n{token}\r\n{timestamp}"
+        signature = f"{path}\r\n{token}\r\n{timestamp}"
         return {
             "token": token,
             "lang": lang,

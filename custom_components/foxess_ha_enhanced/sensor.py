@@ -52,6 +52,7 @@ _ENDPOINT_OA_BATTERY_SETTINGS = "/op/v0/device/battery/soc/get?sn="
 _ENDPOINT_OA_REPORT = "/op/v0/device/report/query"
 _ENDPOINT_OA_DEVICE_DETAIL_V1 = "/op/v1/device/detail"
 _ENDPOINT_OA_DEVICE_VARIABLES_V1 = "/op/v1/device/real/query"
+_ENDPOINT_OA_SCHEDULER_FLAG_GET_V1 = "/op/v1/device/scheduler/get/flag"
 _ENDPOINT_OA_DAILY_GENERATION = "/op/v0/device/generation?sn="
 _ENDPOINT_OA_SETTING_GET = "/op/v0/device/setting/get"
 
@@ -128,6 +129,8 @@ def _initial_all_data():
         "addressbook": {},
         "online": False,
         "workMode": None,
+        "schedulerSupported": None,
+        "schedulerEnabled": None,
     }
     all_data["addressbook"]["hasBattery"] = False
     all_data["addressbook"]["status"] = "3"
@@ -242,6 +245,11 @@ class FoxESSCoordinator(DataUpdateCoordinator):
                 geterror = await getOADeviceDetail(
                     self.hass, allData, self.device_sn, self.api_key, coordinator=self
                 )
+            scheduler_error = await getSchedulerFlag(
+                self.hass, allData, self.device_sn, self.api_key, coordinator=self
+            )
+            if scheduler_error:
+                _LOGGER.debug("getSchedulerFlag returned an error")
             await asyncio.sleep(1)
 
         if not geterror:
@@ -534,7 +542,7 @@ class GetAuth:
             :return: with authentication header
         """
         timestamp = round(time.time() * 1000)
-        signature = rf"{path}\r\n{token}\r\n{timestamp}"
+        signature = f"{path}\r\n{token}\r\n{timestamp}"
         # or use user_agent_rotator.get_random_user_agent() for user-agent
         result = {
             "token": token,
@@ -565,11 +573,11 @@ async def waitforAPI(coordinator=None):
     # check if last_api call was less than a second ago and if so delay the balance of 1 second
     now = time.time()
     last = coordinator._last_api if coordinator is not None else last_api
-    diff = now - last if last != 0 else 1
-    diff = round((diff + 0.2), 2)
-    if diff < 1:
-        await asyncio.sleep(diff)
-        _LOGGER.debug("API enforced delay, wait: %s", diff)
+    elapsed = now - last if last != 0 else 1
+    delay = max(0, 1 - elapsed)
+    if delay:
+        await asyncio.sleep(delay)
+        _LOGGER.debug("API enforced delay, wait: %s", delay)
     now = time.time()
     if coordinator is not None:
         coordinator._last_api = now
@@ -875,6 +883,43 @@ async def getWorkMode(hass, allData, devicesn, apiKey, coordinator=None):
 
     _LOGGER.debug("OA Work Mode Bad Response: %s", response)
     return True
+
+
+async def getSchedulerFlag(hass, allData, devicesn, apiKey, coordinator=None):
+    await waitforAPI(coordinator)
+
+    path = _ENDPOINT_OA_SCHEDULER_FLAG_GET_V1
+    headerData = GetAuth().get_signature(token=apiKey, path=path)
+    payload = json.dumps({"deviceSN": devicesn})
+    rest = RestData(
+        hass,
+        METHOD_POST,
+        _ENDPOINT_OA_DOMAIN + path,
+        DEFAULT_ENCODING,
+        None,
+        headerData,
+        None,
+        payload,
+        DEFAULT_VERIFY_SSL,
+        SSLCipherList.PYTHON_DEFAULT,
+        DEFAULT_TIMEOUT,
+    )
+
+    await rest.async_update()
+    if not rest.data:
+        _LOGGER.debug("Unable to get OA Scheduler Flag from FoxESS Cloud")
+        return True
+
+    response = json.loads(rest.data)
+    if response.get("errno") != 0:
+        _LOGGER.debug("OA Scheduler Flag Bad Response: %s", response)
+        return True
+
+    result = response.get("result") or {}
+    allData["schedulerSupported"] = result.get("support")
+    allData["schedulerEnabled"] = result.get("enable")
+    _LOGGER.debug("OA Scheduler Flag: %s", result)
+    return False
 
 
 async def getReportDailyGeneration(hass, allData, apiKey, devicesn, coordinator=None):

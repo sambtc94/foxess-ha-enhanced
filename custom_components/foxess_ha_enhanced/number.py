@@ -24,7 +24,6 @@ from .sensor import (
 _LOGGER = logging.getLogger(__name__)
 
 _ENDPOINT_OA_BATTERY_SOC_SET = "/op/v0/device/battery/soc/set"
-_ENDPOINT_OA_SETTING_SET = "/op/v0/device/setting/set"
 
 
 async def setBatterySoC(hass, devicesn, apiKey, minSoc, minSocOnGrid, coordinator=None):
@@ -179,37 +178,6 @@ class FoxESSBatMinSoCOnGridNumber(CoordinatorEntity, NumberEntity):
         self.coordinator.async_set_updated_data(self.coordinator.data)
 
 
-async def setMaxCurrent(hass, devicesn, apiKey, key, value, coordinator=None):
-    """Write MaxChargeCurrent or MaxDischargeCurrent via the settings endpoint."""
-    await waitforAPI(coordinator)
-
-    path = _ENDPOINT_OA_SETTING_SET
-    headerData = GetAuth().get_signature(token=apiKey, path=path)
-    payload = json.dumps({"sn": devicesn, "key": key, "value": str(value)})
-
-    rest = RestData(
-        hass,
-        METHOD_POST,
-        _ENDPOINT_OA_DOMAIN + path,
-        DEFAULT_ENCODING,
-        None,
-        headerData,
-        None,
-        payload,
-        DEFAULT_VERIFY_SSL,
-        SSLCipherList.PYTHON_DEFAULT,
-        DEFAULT_TIMEOUT,
-    )
-    await rest.async_update()
-    if not rest.data:
-        raise HomeAssistantError("FoxESS current setting update returned no data")
-
-    response = json.loads(rest.data)
-    if response.get("errno") != 0:
-        _LOGGER.error("FoxESS current setting update failed: %s", response)
-        raise HomeAssistantError("FoxESS current setting update failed")
-
-
 def _device_info(coordinator, deviceID):
     from homeassistant.helpers.entity import DeviceInfo
 
@@ -229,76 +197,6 @@ def _device_info(coordinator, deviceID):
     return info
 
 
-class FoxESSMaxChargeCurrentNumber(CoordinatorEntity, NumberEntity):
-    """Writable maximum battery charge current."""
-
-    _attr_native_min_value = 0
-    _attr_native_max_value = 100
-    _attr_native_step = 1
-    _attr_native_unit_of_measurement = "A"
-    _attr_mode = NumberMode.SLIDER
-    _attr_icon = "mdi:battery-charging-high"
-
-    def __init__(self, coordinator, name, deviceID, deviceSN, apiKey):
-        super().__init__(coordinator=coordinator)
-        self._attr_name = name + " - Max Charge Current"
-        self._attr_unique_id = deviceID + "max-charge-current-number"
-        self._deviceSN = deviceSN
-        self._apiKey = apiKey
-        self._deviceID = deviceID
-
-    @property
-    def device_info(self):
-        return _device_info(self.coordinator, self._deviceID)
-
-    @property
-    def native_value(self) -> float | None:
-        return self.coordinator.data.get("raw", {}).get("maxChargeCurrent")
-
-    async def async_set_native_value(self, value: float) -> None:
-        await setMaxCurrent(
-            self.hass, self._deviceSN, self._apiKey,
-            "MaxChargeCurrent", int(value), coordinator=self.coordinator,
-        )
-        self.coordinator.data["raw"]["maxChargeCurrent"] = int(value)
-        self.coordinator.async_set_updated_data(self.coordinator.data)
-
-
-class FoxESSMaxDischargeCurrentNumber(CoordinatorEntity, NumberEntity):
-    """Writable maximum battery discharge current."""
-
-    _attr_native_min_value = 0
-    _attr_native_max_value = 100
-    _attr_native_step = 1
-    _attr_native_unit_of_measurement = "A"
-    _attr_mode = NumberMode.SLIDER
-    _attr_icon = "mdi:battery-minus"
-
-    def __init__(self, coordinator, name, deviceID, deviceSN, apiKey):
-        super().__init__(coordinator=coordinator)
-        self._attr_name = name + " - Max Discharge Current"
-        self._attr_unique_id = deviceID + "max-discharge-current-number"
-        self._deviceSN = deviceSN
-        self._apiKey = apiKey
-        self._deviceID = deviceID
-
-    @property
-    def device_info(self):
-        return _device_info(self.coordinator, self._deviceID)
-
-    @property
-    def native_value(self) -> float | None:
-        return self.coordinator.data.get("raw", {}).get("maxDischargeCurrent")
-
-    async def async_set_native_value(self, value: float) -> None:
-        await setMaxCurrent(
-            self.hass, self._deviceSN, self._apiKey,
-            "MaxDischargeCurrent", int(value), coordinator=self.coordinator,
-        )
-        self.coordinator.data["raw"]["maxDischargeCurrent"] = int(value)
-        self.coordinator.async_set_updated_data(self.coordinator.data)
-
-
 async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = hass.data[DOMAIN][entry.entry_id]
     name = entry.data.get("name", coordinator.name_prefix)
@@ -309,8 +207,6 @@ async def async_setup_entry(hass, entry, async_add_entities):
     entities = [
         FoxESSBatMinSoCNumber(coordinator, name, device_id, device_sn, api_key),
         FoxESSBatMinSoCOnGridNumber(coordinator, name, device_id, device_sn, api_key),
-        FoxESSMaxChargeCurrentNumber(coordinator, name, device_id, device_sn, api_key),
-        FoxESSMaxDischargeCurrentNumber(coordinator, name, device_id, device_sn, api_key),
     ]
     async_add_entities(entities)
 

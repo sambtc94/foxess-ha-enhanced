@@ -29,7 +29,6 @@ WORK_MODES = {
     "Self-Use": "SelfUse",
     "Backup": "Backup",
     "Feed-In": "Feedin",
-    "Peak Shaving": "PeakShaving",
 }
 
 
