@@ -17,6 +17,7 @@ from .sensor import (
     GetAuth,
     METHOD_POST,
     _ENDPOINT_OA_DOMAIN,
+    _scheduler_max_group_count,
     waitforAPI,
 )
 
@@ -128,7 +129,7 @@ class FoxESSSchedulerSwitch(CoordinatorEntity, SwitchEntity):
         return {
             "scheduler_groups": groups.get("groups", []),
             "scheduler_properties": groups.get("properties"),
-            "scheduler_max_group_count": (groups.get("properties") or {}).get("maxGroupCount"),
+            "scheduler_max_group_count": _scheduler_max_group_count(groups),
         }
 
     @property

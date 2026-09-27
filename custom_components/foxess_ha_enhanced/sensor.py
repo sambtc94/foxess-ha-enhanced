@@ -148,6 +148,20 @@ def _initial_all_data():
     return all_data
 
 
+def _scheduler_max_group_count(scheduler):
+    if not isinstance(scheduler, dict):
+        return None
+    properties = scheduler.get("properties")
+    if isinstance(properties, dict):
+        for key in ("maxGroupCount", "max_group_count", "maxGroups"):
+            if properties.get(key) is not None:
+                return properties[key]
+    for key in ("maxGroupCount", "max_group_count", "maxGroups"):
+        if scheduler.get(key) is not None:
+            return scheduler[key]
+    return None
+
+
 class FoxESSCoordinator(DataUpdateCoordinator):
     def __init__(
         self,
@@ -2248,7 +2262,7 @@ class FoxESSSchedulerSchedule(FoxESSBaseEntity, SensorEntity):
             "scheduler_api_version": self.coordinator.data.get("schedulerApiVersion"),
             "groups": scheduler.get("groups", []),
             "properties": scheduler.get("properties"),
-            "max_group_count": (scheduler.get("properties") or {}).get("maxGroupCount"),
+            "max_group_count": _scheduler_max_group_count(scheduler),
         }
 
 
