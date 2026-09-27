@@ -964,7 +964,7 @@ async def getSchedulerFlag(hass, allData, devicesn, apiKey, coordinator=None):
 async def getSchedulerGroups(hass, allData, devicesn, apiKey, coordinator=None):
     await waitforAPI(coordinator)
 
-    version = 3
+    version = 2
     path = _SCHEDULER_GROUP_GET_ENDPOINTS[version]
     headerData = GetAuth().get_signature(token=apiKey, path=path)
     payload = json.dumps({"deviceSN": devicesn})
