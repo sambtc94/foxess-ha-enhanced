@@ -993,6 +993,12 @@ async def getSchedulerGroups(hass, allData, devicesn, apiKey, coordinator=None):
             _LOGGER.debug("Unable to get OA Scheduler Groups using V%s", version)
             continue
 
+        _LOGGER.debug(
+            "OA Scheduler Groups V%s response from %s: %s",
+            version,
+            path,
+            rest.data,
+        )
         response = json.loads(rest.data)
         if response.get("errno") != 0:
             _LOGGER.debug("OA Scheduler Groups V%s bad response: %s", version, response)
