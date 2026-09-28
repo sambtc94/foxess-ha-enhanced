@@ -172,7 +172,7 @@ groups:
     maxSoc: 100
 ```
 
-Scheduler groups support `SelfUse`, `Feedin`, `Backup`, `ForceCharge`, and `ForceDischarge`. The integration uses the scheduler V3 API for reading and writing groups.
+Scheduler groups support `SelfUse`, `Feedin`, `Backup`, `ForceCharge`, and `ForceDischarge`. The integration uses the scheduler V2 API for reading and writing groups.
 
 Peak Shaving is separate from scheduler groups. It limits grid import and preserves a configured battery SOC. FoxESS does not document a fixed priority between Peak Shaving and the scheduler; behavior can depend on inverter firmware.
 
