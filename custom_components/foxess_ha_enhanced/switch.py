@@ -65,7 +65,7 @@ async def set_scheduler_groups(
 ):
     await waitforAPI(coordinator)
 
-    version = 2
+    version = 3
     path = _SCHEDULER_GROUP_SET_ENDPOINTS[version]
     headers = GetAuth().get_signature(token=api_key, path=path)
     payload = json.dumps(
