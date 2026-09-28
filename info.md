@@ -148,6 +148,12 @@ Force Charge and Force Discharge are scheduler-only modes. They are not offered 
 
 ### Scheduler action
 
+Use the `foxess_ha_enhanced.refresh_scheduler` action to re-read the scheduler time segments. It requires the inverter serial number:
+
+```yaml
+device_sn: YOUR_INVERTER_SERIAL
+```
+
 Use the `foxess_ha_enhanced.set_scheduler` action to write scheduler time groups. Example:
 
 ```yaml

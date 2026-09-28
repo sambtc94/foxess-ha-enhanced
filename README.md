@@ -224,7 +224,7 @@ If you have multiple inverters in your account, you will receive 1,440 calls per
 
 The `Mode Scheduler` switch controls the FoxESS scheduler master switch. Configured scheduler groups are exposed as attributes on that entity.
 
-Timed scheduler groups can be written with the `foxess_ha_enhanced.set_scheduler` action. The action accepts FoxESS fields such as `startHour`, `endHour`, `workMode`, `minSocOnGrid`, `fdSoc`, `fdPwr`, and `maxSoc`.
+Timed scheduler groups can be refreshed with the `foxess_ha_enhanced.refresh_scheduler` action using the required `device_sn` field. They can be written with the `foxess_ha_enhanced.set_scheduler` action, which also requires `device_sn` and accepts FoxESS fields such as `startHour`, `endHour`, `workMode`, `minSocOnGrid`, `fdSoc`, `fdPwr`, and `maxSoc`.
 
 The immediate Work Mode selector supports `SelfUse`, `Feedin`, `Backup`, and `PeakShaving`. `ForceCharge` and `ForceDischarge` are scheduler-only modes and are available through scheduler groups.
 
