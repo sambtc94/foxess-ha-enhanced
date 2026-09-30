@@ -168,6 +168,7 @@ def _battery_capacity_details(battery_list):
         return []
 
     details = []
+    battery_indexes = {}
     for battery in battery_list:
         if not isinstance(battery, dict):
             continue
@@ -178,13 +179,21 @@ def _battery_capacity_details(battery_list):
             capacity = float(reported_capacity)
         except (TypeError, ValueError):
             capacity = None
-        details.append(
-            {
-                "batterySN": battery.get("batterySN"),
-                "model": battery.get("model"),
-                "capacity": capacity,
-            }
-        )
+        detail = {
+            "batterySN": battery.get("batterySN"),
+            "model": battery.get("model"),
+            "capacity": capacity,
+        }
+        battery_sn = detail["batterySN"]
+        if battery_sn is None:
+            details.append(detail)
+            continue
+
+        if battery_sn not in battery_indexes:
+            battery_indexes[battery_sn] = len(details)
+            details.append(detail)
+        elif details[battery_indexes[battery_sn]]["capacity"] is None and capacity is not None:
+            details[battery_indexes[battery_sn]] = detail
     return details
 
 
@@ -2006,9 +2015,10 @@ class FoxESSBatteryCapacity(FoxESSBaseEntity, SensorEntity):
     def native_value(self) -> float | None:
         battery_list = self.coordinator.data["addressbook"].get(ATTR_BATTERYLIST)
         capacities = _battery_capacity_details(battery_list)
-        if not capacities or any(item["capacity"] is None for item in capacities):
+        known_capacities = [item["capacity"] for item in capacities if item["capacity"] is not None]
+        if not known_capacities:
             return None
-        return sum(item["capacity"] for item in capacities)
+        return sum(known_capacities)
 
     @property
     def extra_state_attributes(self):
