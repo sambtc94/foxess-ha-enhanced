@@ -1,6 +1,6 @@
 {
   "domain": "foxess_ha_enhanced",
-  "name": "foxess-ha-enhanced",
+  "name": "FoxESS Enhanced (Cloud)",
   "codeowners": ["@macxq", "@r-amado", "@fozzieuk"],
   "dependencies": ["rest"],
   "documentation": "https://github.com/macxq/foxess-ha",
