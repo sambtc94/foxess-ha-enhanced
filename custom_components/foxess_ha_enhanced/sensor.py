@@ -163,6 +163,31 @@ def _scheduler_max_group_count(scheduler):
     return None
 
 
+def _battery_capacity_details(battery_list):
+    if not isinstance(battery_list, list):
+        return []
+
+    details = []
+    for battery in battery_list:
+        if not isinstance(battery, dict):
+            continue
+        reported_capacity = battery.get("capacity")
+        if reported_capacity is None:
+            reported_capacity = battery.get("capicty")
+        try:
+            capacity = float(reported_capacity)
+        except (TypeError, ValueError):
+            capacity = None
+        details.append(
+            {
+                "batterySN": battery.get("batterySN"),
+                "model": battery.get("model"),
+                "capacity": capacity,
+            }
+        )
+    return details
+
+
 class FoxESSCoordinator(DataUpdateCoordinator):
     def __init__(
         self,
@@ -478,6 +503,7 @@ def _build_entities(coordinator):
         FoxESSEnergyThroughput(coordinator, name, deviceID),
         FoxESSEnergySolar(coordinator, name, deviceID),
         FoxESSInverter(coordinator, name, deviceID),
+        FoxESSBatteryCapacity(coordinator, name, deviceID),
         FoxESSPowerString(coordinator, name, deviceID, "Generation Power", "-generation-power", "generationPower"),
         FoxESSPowerString(coordinator, name, deviceID, "Grid Consumption Power", "grid-consumption-power", "gridConsumptionPower"),
         FoxESSPowerString(coordinator, name, deviceID, "FeedIn Power", "feedIn-power", "feedinPower"),
@@ -1965,6 +1991,30 @@ class FoxESSInverter(FoxESSBaseEntity, SensorEntity):
             ATTR_BATTERYLIST: self.coordinator.data["addressbook"][ATTR_BATTERYLIST],
             ATTR_LASTCLOUDSYNC: datetime.now(),
         }
+
+
+class FoxESSBatteryCapacity(FoxESSBaseEntity, SensorEntity):
+    _attr_icon = "mdi:battery-high"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator, name, deviceID):
+        super().__init__(coordinator=coordinator)
+        self._attr_name = name + " - Total Battery Capacity"
+        self._attr_unique_id = deviceID + "battery-capacity-total"
+
+    @property
+    def native_value(self) -> float | None:
+        battery_list = self.coordinator.data["addressbook"].get(ATTR_BATTERYLIST)
+        capacities = _battery_capacity_details(battery_list)
+        if not capacities or any(item["capacity"] is None for item in capacities):
+            return None
+        return sum(item["capacity"] for item in capacities)
+
+    @property
+    def extra_state_attributes(self):
+        battery_list = self.coordinator.data["addressbook"].get(ATTR_BATTERYLIST)
+        capacities = _battery_capacity_details(battery_list)
+        return {"batteries": capacities} if capacities else None
 
 
 class FoxESSRunningState(FoxESSBaseEntity, SensorEntity):

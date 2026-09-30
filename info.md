@@ -123,6 +123,7 @@ Bat Discharge  |  kWh
 Bat SoC | % (for single battery systems)
 Bat SoC1 | % (for dual battery systems)
 Bat SoC2 | % (for dual battery systems)
+Total Battery Capacity | Sum of reported battery capacities; individual battery details are attributes (API unit unspecified)
 Bat Temp | °C 
 Ambient Temp | °C
 Boost Temp | °C

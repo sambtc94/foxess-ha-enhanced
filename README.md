@@ -139,6 +139,7 @@ Bat SoC | % (single battery systems)
 Bat SoC1 | % (dual battery systems)
 Bat SoC2 | % (dual battery systems)
 Bat SoH | % (single battery systems where BMS supports it)
+Total Battery Capacity | Sum of reported battery capacities; individual battery details are attributes (API unit unspecified)
 Inverter Bat Power | kW (negative=charging, positive=discharging)
 Inverter Bat Power2 | kW (dual battery systems
 Bat Temperature | °C 
