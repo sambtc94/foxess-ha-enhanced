@@ -179,6 +179,8 @@ def _battery_capacity_details(battery_list):
             capacity = float(reported_capacity)
         except (TypeError, ValueError):
             capacity = None
+        else:
+            capacity /= 1000
         detail = {
             "batterySN": battery.get("batterySN"),
             "model": battery.get("model"),
@@ -2005,6 +2007,7 @@ class FoxESSInverter(FoxESSBaseEntity, SensorEntity):
 class FoxESSBatteryCapacity(FoxESSBaseEntity, SensorEntity):
     _attr_icon = "mdi:battery-high"
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
 
     def __init__(self, coordinator, name, deviceID):
         super().__init__(coordinator=coordinator)
@@ -2024,7 +2027,7 @@ class FoxESSBatteryCapacity(FoxESSBaseEntity, SensorEntity):
     def extra_state_attributes(self):
         battery_list = self.coordinator.data["addressbook"].get(ATTR_BATTERYLIST)
         capacities = _battery_capacity_details(battery_list)
-        return {"batteries": capacities} if capacities else None
+        return {"battery_capacity_unit": "kWh", "batteries": capacities} if capacities else None
 
 
 class FoxESSRunningState(FoxESSBaseEntity, SensorEntity):
