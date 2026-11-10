@@ -695,7 +695,7 @@ async def getOADeviceDetail(hass, allData, devicesn, apiKey, coordinator=None):
         return True
     else:
         response = json.loads(restOADeviceDetail.data)
-        if response["errno"] == 0 and (response["msg"]=='success' or response["msg"]=='Operation successful'):
+        if response.get("errno") == 0:
             ResponseTime = round(time.time() * 1000) - timestamp
             if ResponseTime > 0:
                 allData["raw"]["ResponseTime"] = ResponseTime
@@ -753,7 +753,7 @@ async def getOADeviceList(hass, allData, devicesn, apiKey, coordinator=None):
         return True
     else:
         response = json.loads(restOADeviceList.data)
-        if response["errno"] == 0 and (response["msg"]=='success' or response["msg"]=='Operation successful'):
+        if response.get("errno") == 0:
             ResponseTime = round(time.time() * 1000) - timestamp
             if ResponseTime > 0:
                 allData["raw"]["ResponseTime"] = ResponseTime
@@ -820,7 +820,7 @@ async def getOABatterySettings(hass, allData, devicesn, apiKey, coordinator=None
             return True
         else:
             response = json.loads(restOABatterySettings.data)
-            if response["errno"] == 0 and (response["msg"]=='success' or response["msg"]=='Operation successful'):
+            if response.get("errno") == 0:
                 _LOGGER.debug(
                     "OA Battery Settings Good Response: %s", response["result"]
                 )
@@ -891,7 +891,7 @@ async def getReport(hass, allData, apiKey, devicesn, coordinator=None):
     else:
         # Openapi responded so process data
         response = json.loads(restOAReport.data)
-        if response["errno"] == 0 and (response["msg"]=='success' or response["msg"]=='Operation successful'):
+        if response.get("errno") == 0:
             _LOGGER.debug(
                 "OA Report Data fetched OK: %s %s ", response, restOAReport.data[:350]
             )
@@ -952,7 +952,7 @@ async def getWorkMode(hass, allData, devicesn, apiKey, coordinator=None):
         return True
 
     response = json.loads(restOAWorkMode.data)
-    if response["errno"] == 0 and (response["msg"] == 'success' or response["msg"] == 'Operation successful'):
+    if response.get("errno") == 0:
         allData["workMode"] = response.get("result", {}).get("value")
         _LOGGER.debug("OA Work Mode fetched: %s", allData["workMode"])
         return False
@@ -1116,7 +1116,7 @@ async def getReportDailyGeneration(hass, allData, apiKey, devicesn, coordinator=
         return True
     else:
         response = json.loads(restOAgen.data)
-        if response["errno"] == 0 and (response["msg"]=='success' or response["msg"]=='Operation successful'):
+        if response.get("errno") == 0:
             _LOGGER.debug(
                 "OA Daily Generation Report Data fetched OK Response: %s",
                 restOAgen.data[:500],
@@ -1230,7 +1230,7 @@ async def getRaw(hass, allData, apiKey, devicesn, coordinator=None):
     else:
         # Openapi responded correctly
         response = json.loads(restOADeviceVariables.data)
-        if response["errno"] == 0 and (response["msg"]=='success' or response["msg"]=='Operation successful'):
+        if response.get("errno") == 0:
             ResponseTime = round(time.time() * 1000) - timestamp
             if ResponseTime > 0:
                 allData["raw"]["ResponseTime"] = ResponseTime
