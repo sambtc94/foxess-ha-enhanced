@@ -133,6 +133,35 @@ class FoxessConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             }
         )
 
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        errors: dict[str, str] = {}
+        entry = self._get_reconfigure_entry()
+
+        if user_input is not None:
+            data = {**entry.data, CONF_APIKEY: user_input[CONF_APIKEY]}
+            try:
+                await validate_input(self.hass, data)
+            except InvalidAuth:
+                errors["base"] = "invalid_auth"
+            except CannotConnect:
+                errors["base"] = "cannot_connect"
+            except Exception:
+                _LOGGER.exception("Unexpected exception during FoxESS API key validation")
+                errors["base"] = "unknown"
+            else:
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data_updates={CONF_APIKEY: user_input[CONF_APIKEY]},
+                )
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=vol.Schema({vol.Required(CONF_APIKEY): str}),
+            errors=errors,
+        )
+
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         errors: dict[str, str] = {}
 

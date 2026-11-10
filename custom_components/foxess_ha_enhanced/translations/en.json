@@ -15,6 +15,13 @@
           "Restrict": "Restrict real-time variables",
           "Evo": "Use EVO device mode"
         }
+      },
+      "reconfigure": {
+        "title": "Update FoxESS API key",
+        "description": "Enter the new API key for this device.",
+        "data": {
+          "apiKey": "API key"
+        }
       }
     },
     "error": {
@@ -23,7 +30,8 @@
       "unknown": "Unexpected error occurred."
     },
     "abort": {
-      "already_configured": "This device is already configured."
+      "already_configured": "This device is already configured.",
+      "reconfigure_successful": "The API key was updated."
     }
   }
 }

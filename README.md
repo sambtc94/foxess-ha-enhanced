@@ -40,6 +40,8 @@ sensor:
 
 - `your_personal_api_key` is a personal api_key that is generated in your profile selection of your Foxesscloud account. To do this log into the Foxesscloud.com website, click on the 'profile icon' in the top right corner and select 'User Profile'. Then on the menu on the left hand side select 'API Management' and click 'Generate API Key, the long string that it generates should be copied and pasted into the platform config setting of your configuration.yaml apiKey: replacing the text `foxesscloud_personal_api_key` (see example above).
 
+- For an integration added through Home Assistant's UI, you can replace an expired or rotated API key without removing the integration: open **Settings → Devices & services**, select FoxESS Enhanced, open its menu, and choose **Reconfigure**. Enter the new API key; the integration validates it and reloads using the existing device settings.
+
 - `your_inverter_id` ⚠️  Please note the inverter_id requirement has changed and the deviceID is only required for legacy installations installed prior to the OpenAPI being introduced, for these older installations do not remove it as it will affect your entity history and follow the notes for legacy installations below.
 
    **For new 'OpenAPI' installations, follow these instructions:**
